@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.1",
+  "classifier_id": "semantic-routing-sensitivity",
+  "source": {
+    "type": "huggingface",
+    "repo": "cnuland/semantic-routing-sensitivity",
+    "revision": "43f21d21ac48134464f8510a9ac9c95bdac7ba86"
+  },
+  "runtime": {
+    "backend": "candle",
+    "adapter": "sentence-transformer-embedding"
+  },
+  "model": {
+    "weights": "/models/model.safetensors",
+    "tokenizer": "/models/tokenizer.json",
+    "pooling_config": "/models/1_Pooling/config.json"
+  },
+  "classification": {
+    "strategy": "prototype_cosine_similarity",
+    "taxonomy_revision": "VERIFY-BEFORE-GOLDEN-CLASSIFICATION",
+    "prototype_revision": "VERIFY-BEFORE-GOLDEN-CLASSIFICATION"
+  }
+}

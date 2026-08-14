@@ -1,0 +1,21 @@
+# Red Hat/OpenShift-style ModelCar test fixture.
+# Release automation should pin base images by digest.
+ARG HF_MODEL=cnuland/semantic-routing-sensitivity
+ARG HF_REVISION=43f21d21ac48134464f8510a9ac9c95bdac7ba86
+
+FROM registry.access.redhat.com/ubi9/python-311:latest AS downloader
+ARG HF_MODEL
+ARG HF_REVISION
+USER 0
+RUN python -m pip install --no-cache-dir huggingface-hub
+COPY download_model.py /usr/local/bin/download_model.py
+RUN python /usr/local/bin/download_model.py \
+    --repo "${HF_MODEL}" \
+    --revision "${HF_REVISION}" \
+    --output /models
+COPY classifier-manifest.json /models/llm-d-sc-classifier.json
+
+FROM registry.access.redhat.com/ubi9/ubi-micro:latest
+COPY --from=downloader --chown=0:0 /models /models
+RUN chmod -R a=rX /models
+USER 65534
