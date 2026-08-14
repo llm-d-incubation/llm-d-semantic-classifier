@@ -1,0 +1,18 @@
+# 0.1 Promotion Checklist
+- [ ] Exact SHA builds cleanly.
+- [ ] RED/GREEN evidence exists for implemented acceptance criteria.
+- [ ] Readiness follows model warmup.
+- [ ] ModelCar is pinned and self-contained with HF egress disabled at runtime.
+- [ ] Golden reference parity passes.
+- [ ] Cache hit invokes zero model forwards.
+- [ ] Queue remains bounded under overload.
+- [ ] Dummy Praxis persistent-gRPC E2E passes.
+- [ ] Response does not contain final route.
+- [ ] Sidecar and ClusterIP p50/p95/p99 evidence attached.
+- [ ] Queue/tokenize/forward/total metrics present.
+- [ ] Restart/full-context correctness passes.
+- [ ] Telemetry redaction passes.
+- [ ] GitHub CI green.
+- [ ] Independent reviewer PASS.
+- [ ] Exact SHA homelab validation green.
+- [ ] Maintainer approves.

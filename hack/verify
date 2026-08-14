@@ -4,10 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 if [ -f Cargo.toml ]; then
   cargo fmt --check
-  cargo clippy --all-targets --locked -- -D warnings
-  cargo build --locked
-  # impacted tests: default to full unit suite until test-impact has a dependency map
-  cargo test --locked
+  cargo clippy --workspace --all-targets --all-features -- -D warnings
+  cargo build --workspace --locked
+  cargo test --workspace --all-features --locked
 else
   echo "[verify] scaffolding phase — validating repo invariants instead"
   test -f AGENTS.md && test -f CONTRIBUTING.md && test -d specs/TEMPLATE
