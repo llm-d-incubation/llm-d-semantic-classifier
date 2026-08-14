@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# The local gate: format, lint, types, impacted tests. Must be GREEN before review.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [ -f Cargo.toml ]; then
+  cargo fmt --check
+  cargo clippy --all-targets --locked -- -D warnings
+  cargo build --locked
+  # impacted tests: default to full unit suite until test-impact has a dependency map
+  cargo test --locked
+else
+  echo "[verify] scaffolding phase — validating repo invariants instead"
+  test -f AGENTS.md && test -f CONTRIBUTING.md && test -d specs/TEMPLATE
+  # every hack script must be executable
+  find hack -type f ! -perm -u+x -print | grep . && { echo "[verify] FAIL: non-executable hack script"; exit 1; } || true
+  # every skill must have frontmatter
+  for s in .opencode/skills/*/SKILL.md; do head -1 "$s" | grep -q '^---$' || { echo "[verify] FAIL: $s missing frontmatter"; exit 1; }; done
+  echo "[verify] GREEN (scaffolding invariants)"
+fi

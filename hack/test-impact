@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Affected-test discovery. Consumed by the worker instead of guessing.
+# Usage: ./hack/test-impact <changed-files...>   [--run]
+# The dependency map grows with the codebase; unknown surfaces demand the full suite.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+RUN=false; FILES=()
+for a in "$@"; do [ "$a" = "--run" ] && RUN=true || FILES+=("$a"); done
+if [ ! -f Cargo.toml ]; then echo "Required:"; echo "  hack/verify (scaffolding invariants)"; $RUN && ./hack/verify; exit 0; fi
+REQ=()
+for f in "${FILES[@]:-}"; do
+  case "$f" in
+    src/grpc/*|proto/*)   REQ+=("tests/grpc");;
+    src/http/*)           REQ+=("tests/http");;
+    src/cache/*)          REQ+=("tests/cache");;
+    src/infer/*|src/model/*) REQ+=("tests/infer");;
+    src/*)                REQ+=("UNKNOWN SURFACE");;
+  esac
+done
+if printf '%s\n' "${REQ[@]:-}" | grep -q 'UNKNOWN SURFACE'; then
+  echo "Required:"; echo "  FULL SUITE (unknown surface — update hack/test-impact map)"
+  $RUN && ./hack/test-all; exit 0
+fi
+echo "Required:"; printf '%s\n' "${REQ[@]:-}" | sort -u | sed 's/^/  /'
+echo "Recommended:"; echo "  cargo test --locked (unit)"
+$RUN && cargo test --locked

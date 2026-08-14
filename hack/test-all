@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Full required suite.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [ -f Cargo.toml ]; then
+  cargo test --locked --all-targets
+  # integration/e2e suites append here as they land (per specs/*/test-plan.md)
+else
+  ./hack/verify
+fi

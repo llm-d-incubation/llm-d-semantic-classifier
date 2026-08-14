@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Verify the working tree maps to the active spec: spec exists, has unchecked criteria,
+# and the diff surface is declared. Deterministic checks only; judgment belongs to review.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ID="${1:?usage: spec-check <spec-id>}"
+D="specs/$ID"
+test -f "$D/spec.md" || { echo "[spec-check] FAIL: $D/spec.md missing"; exit 1; }
+test -f "$D/test-plan.md" || { echo "[spec-check] FAIL: $D/test-plan.md missing"; exit 1; }
+grep -q '\- \[ \]' "$D/spec.md" || echo "[spec-check] note: no unchecked acceptance criteria remain"
+echo "[spec-check] changed files vs HEAD:"
+git diff --name-only HEAD | sed 's/^/  /'
+echo "[spec-check] OK (deterministic checks passed; reviewer judges scope)"

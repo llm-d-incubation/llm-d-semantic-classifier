@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Deterministic build. Rust-aware; no-op with notice until the crate lands.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [ -f Cargo.toml ]; then
+  cargo build --locked
+else
+  echo "[build] no Cargo.toml yet (scaffolding phase) — nothing to build"
+fi

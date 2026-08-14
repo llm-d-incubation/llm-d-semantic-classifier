@@ -1,0 +1,20 @@
+# Promotion-time Fable review (STUB — enabled when ANTHROPIC_API_KEY secret is configured).
+# Security invariants when enabling:
+#   - review job receives sanitized diff/spec/evidence; it does NOT execute repo scripts
+#   - untrusted CI execution jobs never see the reviewer secret
+#   - runs only on maintainer-labeled PRs (label: promote)
+name: reviewer
+on:
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  fable-review:
+    if: github.event.label.name == 'promote'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: stub
+        run: echo "Fable promotion review adapter not yet wired (needs ANTHROPIC_API_KEY secret + adapter script). Home-lab review is authoritative until then."
