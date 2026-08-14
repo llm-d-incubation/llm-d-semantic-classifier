@@ -1,0 +1,23 @@
+[package]
+name = "llm-d-sc"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "llm-d-sc semantic classification runtime"
+
+[lib]
+name = "llm_d_sc"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+incremental = false
+debug = false
+strip = "symbols"
