@@ -1,0 +1,12 @@
+{
+  "input": "this is a golden sensitivity input",
+  "token_ids": [101, 2023, 2003, 1037, 3585, 14639, 7953, 102],
+  "reference": {
+    "type": "huggingface",
+    "repo": "cnuland/semantic-routing-sensitivity",
+    "revision": "43f21d21ac48134464f8510a9ac9c95bdac7ba86",
+    "tokenizer": "BertTokenizer (fast)",
+    "generated_with": "HuggingFace tokenizers library (BertNormalizer + BertPreTokenizer + WordPiece + TemplateProcessing)",
+    "note": "token_ids include [CLS]=101 and [SEP]=102 from the TemplateProcessing post-processor"
+  }
+}
