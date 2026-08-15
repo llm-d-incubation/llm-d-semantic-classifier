@@ -5,5 +5,6 @@
 //! Candle backend arrive in later acceptance criteria.
 
 pub mod config;
+pub mod embedding;
 pub mod runtime;
 pub mod tokenizer;

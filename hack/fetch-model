@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Fetch the pinned sensitivity model weights into ./artifacts/models/sensitivity/
+# (gitignored — weights are NEVER committed). Deterministic: pinned HF revision,
+# skip when the target files are already present, verify nonzero sizes.
+#
+# Usage: ./hack/fetch-model
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+REPO="cnuland/semantic-routing-sensitivity"
+REV="43f21d21ac48134464f8510a9ac9c95bdac7ba86"
+TARGET="artifacts/models/sensitivity"
+
+FILES=(
+  "model.safetensors"
+  "config.json"
+  "1_Pooling/config.json"
+)
+
+missing=0
+for f in "${FILES[@]}"; do
+  if [ ! -s "$TARGET/$f" ]; then
+    echo "[fetch-model] missing or empty: $TARGET/$f"
+    missing=1
+  fi
+done
+
+if [ "$missing" -eq 0 ]; then
+  echo "[fetch-model] model already present in $TARGET — skipping download"
+  exit 0
+fi
+
+mkdir -p "$TARGET"
+python3 - "$REPO" "$REV" "$TARGET" <<'PY'
+import os
+import sys
+from huggingface_hub import hf_hub_download
+
+repo, rev, target = sys.argv[1], sys.argv[2], sys.argv[3]
+for name in ("model.safetensors", "config.json"):
+    hf_hub_download(
+        repo_id=repo, revision=rev, filename=name,
+        local_dir=target,
+    )
+# nested file lives under the model's 1_Pooling/ module dir
+os.makedirs(os.path.join(target, "1_Pooling"), exist_ok=True)
+hf_hub_download(
+    repo_id=repo, revision=rev, filename="1_Pooling/config.json",
+    local_dir=target,
+)
+print(f"[fetch-model] downloaded {repo}@{rev} -> {target}")
+PY
+
+# verify every required file is present and nonzero
+for f in "${FILES[@]}"; do
+  if [ ! -s "$TARGET/$f" ]; then
+    echo "[fetch-model] FAIL: $TARGET/$f missing or zero-size after download" >&2
+    exit 1
+  fi
+done
+echo "[fetch-model] OK: all files present and nonzero in $TARGET"
