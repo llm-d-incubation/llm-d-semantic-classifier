@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Parity suite: fetches the pinned model then runs the ignored-by-default
+# model-dependent tests. Required for AC-004 GREEN and promotion CI.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+./hack/fetch-model
+cargo test --locked -- --ignored
