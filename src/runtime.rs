@@ -5,6 +5,17 @@
 
 use std::path::Path;
 
+/// Required resident ModelCar files relative to the model directory, as
+/// declared by `tests/fixtures/modelcar/classifier-manifest.json`. Warmup must
+/// verify these are present so the runtime starts solely from `/models` with no
+/// runtime Hugging Face fetch.
+#[cfg(test)]
+const MODELCAR_REQUIRED_FILES: &[&str] = &[
+    "model.safetensors",
+    "tokenizer.json",
+    "1_Pooling/config.json",
+];
+
 /// Readiness gate for the resident runtime.
 ///
 /// Starts NOT ready and only flips to READY after a successful warmup.
@@ -52,6 +63,30 @@ impl Runtime {
         Ok(())
     }
 
+    /// Load and warm a ModelCar at `path`.
+    ///
+    /// A ModelCar must contain every file in `required_files` (relative to
+    /// `path`); a missing required file fails warmup and keeps the runtime NOT
+    /// ready. On success the runtime flips to READY.
+    pub fn warmup_modelcar<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        required_files: &[&str],
+    ) -> Result<(), String> {
+        let path = path.as_ref();
+        for f in required_files {
+            let required = path.join(f);
+            if !required.is_file() {
+                return Err(format!(
+                    "ModelCar missing required file {} at {}",
+                    f,
+                    required.display()
+                ));
+            }
+        }
+        self.warmup(path)
+    }
+
     /// Current readiness.
     pub fn readiness(&self) -> Readiness {
         if self.ready {
@@ -70,7 +105,7 @@ impl Default for Runtime {
 
 #[cfg(test)]
 mod tests {
-    use super::Runtime;
+    use super::{Runtime, MODELCAR_REQUIRED_FILES};
 
     #[test]
     fn u020_readiness_false_before_successful_warmup() {
@@ -101,5 +136,29 @@ mod tests {
             !runtime.readiness().ready(),
             "must stay not-ready after failed warmup"
         );
+    }
+
+    #[test]
+    fn i064_incomplete_modelcar_fails_readiness() {
+        // I-064 (AC-003): an incomplete/corrupt ModelCar must fail readiness.
+        // The ModelCar manifest (classifier-manifest.json) requires the files
+        // `/models/model.safetensors`, `/models/tokenizer.json`, and
+        // `/models/1_Pooling/config.json` to be present and readable. A model
+        // directory that exists but is missing these required files must keep
+        // the runtime NOT ready.
+        let dir = std::env::temp_dir().join("llm-d-sc-i064-incomplete");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Intentionally write NO required ModelCar files: no weights, no
+        // tokenizer, no pooling config.
+        let mut runtime = Runtime::new();
+        runtime
+            .warmup_modelcar(&dir, MODELCAR_REQUIRED_FILES)
+            .expect_err("incomplete ModelCar must fail warmup");
+        assert!(
+            !runtime.readiness().ready(),
+            "must stay not-ready when ModelCar is incomplete"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
