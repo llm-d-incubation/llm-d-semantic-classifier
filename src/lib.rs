@@ -7,6 +7,7 @@
 pub mod cache;
 pub mod config;
 pub mod embedding;
+pub mod queue;
 pub mod ranker;
 pub mod runtime;
 pub mod tokenizer;
