@@ -7,6 +7,7 @@
 pub mod cache;
 pub mod classify;
 pub mod config;
+pub mod dummy_praxis;
 pub mod embedding;
 pub mod grpc;
 pub mod queue;

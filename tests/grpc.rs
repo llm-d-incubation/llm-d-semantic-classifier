@@ -9,8 +9,16 @@
 //! (tokenizer -> versioned cache -> single-flight -> ranker over the committed
 //! synthetic prototypes) — no Candle model is required for I-001.
 //!
-//! I-005/I-006/I-008 (dummy-Praxis semantics) and S-001/S-002 (OpenShift system)
-//! are deferred to later slices/phases within AC-009.
+//! This slice selects I-005/I-006 (dummy-Praxis semantics): the dummy Praxis
+//! preserves the session metadata it propagates and consumes the ranked signal
+//! then routes OUTSIDE llm-d-sc via its fixed test-only mapping (routing
+//! authority stays Praxis). I-008 (multi-turn requests do not reconnect per
+//! call) is asserted by I-002 (`channel_reconnect_count == 0`).
+//!
+//! The proving tests drive a [`llm_d_sc::dummy_praxis::DummyPraxis`] client
+//! against the real classify server over the persistent channel. The dummy
+//! module is intentionally NOT implemented yet, so these tests cannot compile
+//! until it exists — that is the expected RED for this slice.
 
 use llm_d_sc::classify::ClassifyService;
 use llm_d_sc::grpc::classify::generated;
@@ -111,5 +119,94 @@ fn i002_persistent_http2_channel_reused() {
         client.channel_reconnect_count(),
         0,
         "I-008: multi-turn requests must not reconnect per call"
+    );
+}
+
+/// I-005: the dummy Praxis preserves session metadata.
+///
+/// AC-009 requires the dummy Praxis to receive a synthetic request, propagate
+/// request_id/session_id/context/requested-signals/deadline to llm-d-sc over the
+/// PERSISTENT channel, consume the ranked signal, and keep that session metadata
+/// intact for its own (outside llm-d-sc) routing decision. This test drives a
+/// real DummyPraxis client against the real classify server and asserts the
+/// request/session ids the dummy propagated are preserved verbatim and it
+/// recorded a route of its own — never one dictated by llm-d-sc.
+#[test]
+fn i005_dummy_praxis_preserves_session_metadata() {
+    use llm_d_sc::dummy_praxis::{DummyPraxis, DummyRequest};
+    use llm_d_sc::grpc::classify::ClassifyServer;
+
+    let server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
+    let addr = server.local_addr();
+    let mut praxis = DummyPraxis::connect(&addr).expect("dummy praxis must connect");
+
+    let req = DummyRequest {
+        request_id: "req-0005".to_string(),
+        session_id: "sess-0005".to_string(),
+        context: "this is a golden sensitivity input".to_string(),
+        signals: vec!["sensitivity".to_string()],
+        deadline: None,
+    };
+    let outcome = praxis
+        .classify_and_route(req.clone())
+        .expect("dummy praxis must classify and route");
+
+    // The dummy preserved the session metadata it propagated: its recorded ids
+    // match what it sent (routing/session authority stays Praxis, AC-010).
+    assert_eq!(
+        outcome.request_id, req.request_id,
+        "request_id must be preserved"
+    );
+    assert_eq!(
+        outcome.session_id, req.session_id,
+        "session_id must be preserved"
+    );
+    // The dummy recorded a route of its own (outside llm-d-sc).
+    assert!(
+        !outcome.route.is_empty(),
+        "dummy praxis must record its own route outside llm-d-sc"
+    );
+}
+
+/// I-006: the dummy Praxis consumes the signal, then routes OUTSIDE llm-d-sc.
+///
+/// The classify response must carry ranked signals but NEVER a final route; the
+/// dummy applies its fixed test-only mapping (NEVER_EGRESS -> local-model,
+/// otherwise -> general-model) and records the resulting route + classifier RTT.
+/// This asserts routing authority stays outside llm-d-sc (AC-009/AC-010).
+#[test]
+fn i006_dummy_praxis_routes_outside_llm_d_sc() {
+    use llm_d_sc::dummy_praxis::{DummyPraxis, DummyRequest};
+    use llm_d_sc::grpc::classify::ClassifyServer;
+
+    let server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
+    let addr = server.local_addr();
+    let mut praxis = DummyPraxis::connect(&addr).expect("dummy praxis must connect");
+
+    let req = DummyRequest {
+        request_id: "req-0006".to_string(),
+        session_id: "sess-0006".to_string(),
+        context: "this is a golden sensitivity input".to_string(),
+        signals: vec!["sensitivity".to_string()],
+        deadline: None,
+    };
+    let outcome = praxis
+        .classify_and_route(req)
+        .expect("dummy praxis must classify and route");
+
+    // The dummy CONSUMED a ranked semantic signal from llm-d-sc...
+    assert!(
+        !outcome.signal.is_empty(),
+        "dummy praxis must consume a ranked semantic signal"
+    );
+    // ...then routed OUTSIDE llm-d-sc via its fixed test-only mapping.
+    assert!(
+        outcome.route == "general-model" || outcome.route == "local-model",
+        "route must come from the dummy test policy, not llm-d-sc"
+    );
+    // It measured a monotonic start/end around the classifier RPC.
+    assert!(
+        outcome.rtt > std::time::Duration::ZERO,
+        "dummy praxis must measure classifier RTT"
     );
 }
