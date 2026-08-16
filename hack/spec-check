@@ -1,13 +1,39 @@
 #!/usr/bin/env bash
-# Verify the working tree maps to the active spec: spec exists, has unchecked criteria,
-# and the diff surface is declared. Deterministic checks only; judgment belongs to review.
+# Deterministic spec/test-plan/matrix cross-verification.
+# - every AC in spec.md appears in test-plan.md
+# - every U/I/S/P/R test ID referenced by test-plan.md exists in tests/TEST_MATRIX.md
+# - evidence tier report per AC: LOCAL-GREEN / PROMOTION-GREEN / open
+# - --promotion: exit nonzero unless every AC has PROMOTION-GREEN.md
 set -euo pipefail
 cd "$(dirname "$0")/.."
-ID="${1:?usage: spec-check <spec-id>}"
+ID="${1:?usage: spec-check <spec-id> [--promotion]}"
+MODE="${2:-}"
 D="specs/$ID"
 test -f "$D/spec.md" || { echo "[spec-check] FAIL: $D/spec.md missing"; exit 1; }
 test -f "$D/test-plan.md" || { echo "[spec-check] FAIL: $D/test-plan.md missing"; exit 1; }
-grep -q '\- \[ \]' "$D/spec.md" || echo "[spec-check] note: no unchecked acceptance criteria remain"
-echo "[spec-check] changed files vs HEAD:"
-git diff --name-only HEAD | sed 's/^/  /'
-echo "[spec-check] OK (deterministic checks passed; reviewer judges scope)"
+python3 - "$D" "$MODE" <<'PY'
+import re, sys, os
+d, mode = sys.argv[1], sys.argv[2]
+spec = open(f"{d}/spec.md").read()
+plan = open(f"{d}/test-plan.md").read()
+matrix = open("tests/TEST_MATRIX.md").read()
+acs = sorted(set(re.findall(r'AC-\d+', spec)))
+plan_acs = set(re.findall(r'AC-\d+', plan))
+missing_plan = [a for a in acs if a not in plan_acs]
+if missing_plan: print(f"[spec-check] FAIL: ACs missing from test-plan: {missing_plan}"); sys.exit(1)
+ids = sorted(set(re.findall(r'\b([UISPR]-\d{3})\b', plan)))
+matrix_ids = set(re.findall(r'\b([UISPR]-\d{3})\b', matrix))
+ghosts = [i for i in ids if i not in matrix_ids]
+if ghosts: print(f"[spec-check] FAIL: test-plan references IDs absent from TEST_MATRIX: {ghosts}"); sys.exit(1)
+print(f"[spec-check] {len(acs)} ACs mapped; {len(ids)} test IDs all present in matrix")
+promo_missing = []
+for a in acs:
+    ev = f"{d}/evidence/{a}"
+    if os.path.exists(f"{ev}/PROMOTION-GREEN.md"): tier = "PROMOTION-GREEN"
+    elif os.path.exists(f"{ev}/LOCAL-GREEN.md"):   tier = "LOCAL-GREEN"; promo_missing.append(a)
+    else:                                          tier = "open";        promo_missing.append(a)
+    print(f"  {a}: {tier}")
+if mode == "--promotion" and promo_missing:
+    print(f"[spec-check] PROMOTION FAIL: not promotion-green: {promo_missing}"); sys.exit(1)
+print("[spec-check] OK" + (" (promotion satisfied)" if mode=="--promotion" else " (local mode; promotion tiers reported above)"))
+PY

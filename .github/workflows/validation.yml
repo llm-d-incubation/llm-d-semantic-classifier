@@ -12,5 +12,10 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - run: ./hack/test-all
+      - name: model parity suite (pinned fetch + ignored tests)
+        run: |
+          rustup toolchain install stable --profile minimal
+          pip3 install -q huggingface-hub
+          ./hack/test-parity
       # container build, compatibility matrix, EvalHub suite, MLflow evidence: added
       # when the service exists (see README lifecycle).
