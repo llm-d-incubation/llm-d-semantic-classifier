@@ -5,50 +5,35 @@
 //! the resident tokenizer must reproduce the exact token IDs of the pinned
 //! Python reference for the golden inputs.
 //!
-//! [`Tokenizer`] loads a `tokenizer.json` in the HuggingFace `tokenizers`
-//! library format and reproduces the reference `BertNormalizer` +
-//! `BertPreTokenizer` + `WordPiece` + `TemplateProcessing` pipeline. This is a
-//! resident tokenizer: it reads only the committed ModelCar fixture and makes
-//! no network call.
+//! [`Tokenizer`] is a thin resident wrapper around the official HuggingFace
+//! `tokenizers` crate. It loads a `tokenizer.json` in the HF `tokenizers`
+//! library format and delegates all of normalization, pre-tokenization,
+//! wordpiece, template processing, and truncation to that crate, so parity with
+//! the pinned reference is exact by construction. It is resident: it reads only
+//! the committed ModelCar fixture and makes no network call.
 
-use serde_json::Value;
-use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
-use unicode_categories::UnicodeCategories;
-use unicode_normalization::UnicodeNormalization;
 
-/// A resident BERT wordpiece tokenizer loaded from a `tokenizer.json`.
+/// A resident BERT tokenizer, backed by the official HuggingFace `tokenizers`
+/// crate.
 ///
 /// Tokenization follows the pinned reference (HuggingFace `tokenizers` library)
 /// so downstream pooling and ranking parity can be proven against the same
 /// reference fixtures.
 pub struct Tokenizer {
-    vocab: HashMap<String, u32>,
-    unk_id: u32,
-    cls_id: u32,
-    sep_id: u32,
-    continuing_subword_prefix: String,
-    max_input_chars_per_word: usize,
-    max_length: Option<usize>,
-    lower: bool,
-    strip_accents: bool,
+    inner: tokenizers::Tokenizer,
 }
 
 /// Errors produced while loading or tokenizing.
 #[derive(Debug)]
 pub enum TokenizerError {
-    Io(std::io::Error),
-    Json(serde_json::Error),
-    MissingField(&'static str),
+    Tokenizers(tokenizers::Error),
 }
 
 impl std::fmt::Display for TokenizerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TokenizerError::Io(e) => write!(f, "tokenizer io error: {e}"),
-            TokenizerError::Json(e) => write!(f, "tokenizer json error: {e}"),
-            TokenizerError::MissingField(name) => write!(f, "tokenizer missing field: {name}"),
+            TokenizerError::Tokenizers(e) => write!(f, "tokenizer error: {e}"),
         }
     }
 }
@@ -57,273 +42,31 @@ impl std::error::Error for TokenizerError {}
 
 impl Tokenizer {
     /// Load a tokenizer from a `tokenizer.json` (tokenizers library format).
+    ///
+    /// The fixture's `truncation.max_length` (matching the pinned reference) is
+    /// applied by the crate when the file is deserialized, so over-length
+    /// inputs are capped deterministically exactly as the reference does.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Tokenizer, TokenizerError> {
-        let raw = fs::read_to_string(path).map_err(TokenizerError::Io)?;
-        let root: Value = serde_json::from_str(&raw).map_err(TokenizerError::Json)?;
-
-        let mut vocab = HashMap::new();
-        let vocab_obj = root
-            .get("model")
-            .and_then(|m| m.get("vocab"))
-            .and_then(Value::as_object)
-            .ok_or(TokenizerError::MissingField("model.vocab"))?;
-        for (token, id) in vocab_obj {
-            let id = id
-                .as_u64()
-                .ok_or(TokenizerError::MissingField("model.vocab id"))? as u32;
-            vocab.insert(token.clone(), id);
-        }
-
-        let unk_token = root
-            .get("model")
-            .and_then(|m| m.get("unk_token"))
-            .and_then(Value::as_str)
-            .ok_or(TokenizerError::MissingField("model.unk_token"))?;
-        let unk_id = vocab.get(unk_token).copied().unwrap_or(0);
-
-        let continuing_subword_prefix = root
-            .get("model")
-            .and_then(|m| m.get("continuing_subword_prefix"))
-            .and_then(Value::as_str)
-            .unwrap_or("##")
-            .to_string();
-
-        let max_input_chars_per_word = root
-            .get("model")
-            .and_then(|m| m.get("max_input_chars_per_word"))
-            .and_then(Value::as_u64)
-            .unwrap_or(100) as usize;
-
-        // [CLS]/[SEP] ids come from the TemplateProcessing post-processor.
-        let cls_id = special_token_id(&root, "[CLS]").unwrap_or(101);
-        let sep_id = special_token_id(&root, "[SEP]").unwrap_or(102);
-
-        // Truncation (U-066): honor the fixture's `truncation.max_length`,
-        // matching the pinned reference so over-length inputs are capped
-        // deterministically. Absent when the tokenizer.json has no truncation.
-        let max_length = root
-            .get("truncation")
-            .and_then(|t| t.get("max_length"))
-            .and_then(Value::as_u64)
-            .map(|v| v as usize);
-
-        let lower = root
-            .get("normalizer")
-            .and_then(|n| n.get("lowercase"))
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        // The tokenizers library defaults `strip_accents` to the `lowercase`
-        // value when unset (the sensitivity fixture ships `strip_accents: null`).
-        let strip_accents = match root.get("normalizer").and_then(|n| n.get("strip_accents")) {
-            Some(v) => v.as_bool().unwrap_or(lower),
-            None => lower,
-        };
-
-        Ok(Tokenizer {
-            vocab,
-            unk_id,
-            cls_id,
-            sep_id,
-            continuing_subword_prefix,
-            max_input_chars_per_word,
-            max_length,
-            lower,
-            strip_accents,
-        })
+        let inner = tokenizers::Tokenizer::from_file(path).map_err(TokenizerError::Tokenizers)?;
+        Ok(Tokenizer { inner })
     }
 
     /// Tokenize a single sequence, returning token IDs including `[CLS]` and
     /// `[SEP]` (matching the reference `TemplateProcessing`). Over-length inputs
-    /// are truncated to the fixture's `max_length` (deterministically, dropping
-    /// excess tokens from the right), matching the pinned reference.
+    /// are truncated to the fixture's `max_length` by the crate.
     pub fn tokenize(&self, text: &str) -> Result<Vec<u32>, TokenizerError> {
-        let normalized = self.normalize(text);
-        let words = self.pre_tokenize(&normalized);
-        let mut content = Vec::with_capacity(words.len());
-        for w in words {
-            content.extend(self.wordpiece(&w));
-        }
-        // Truncate content first, then wrap with [CLS]/[SEP]. The reference
-        // caps total length (including the two special tokens) at max_length,
-        // so the content budget is max_length - 2.
-        if let Some(max_length) = self.max_length {
-            content.truncate(max_length.saturating_sub(2));
-        }
-        let mut ids = Vec::with_capacity(content.len() + 2);
-        ids.push(self.cls_id);
-        ids.extend(content);
-        ids.push(self.sep_id);
-        Ok(ids)
+        let encoding = self
+            .inner
+            .encode(text, true)
+            .map_err(TokenizerError::Tokenizers)?;
+        Ok(encoding.get_ids().to_vec())
     }
-
-    /// Reference `BertNormalizer`: clean text, space out CJK chars, strip
-    /// accents, lowercase.
-    fn normalize(&self, text: &str) -> String {
-        // clean_text: drop NUL/U+FFFD/control chars, map whitespace to ' '.
-        let cleaned: String = text
-            .chars()
-            .filter(|c| !(*c as usize == 0 || *c == '\u{fffd}' || is_control(*c)))
-            .map(|c| if is_whitespace(c) { ' ' } else { c })
-            .collect();
-        let spaced = handle_chinese_chars(&cleaned);
-        let stripped = if self.strip_accents {
-            spaced
-                .as_str()
-                .nfd()
-                .filter(|c| !is_nonspacing_mark(*c))
-                .collect::<String>()
-        } else {
-            spaced
-        };
-        if self.lower {
-            stripped.to_lowercase()
-        } else {
-            stripped
-        }
-    }
-
-    /// Reference `BertPreTokenizer`: split on whitespace (removed), then split
-    /// on punctuation (isolated).
-    fn pre_tokenize(&self, text: &str) -> Vec<String> {
-        let whitespace_split: Vec<&str> = text
-            .split(char::is_whitespace)
-            .filter(|s| !s.is_empty())
-            .collect();
-        let mut tokens = Vec::new();
-        for part in whitespace_split {
-            let mut cur = String::new();
-            for c in part.chars() {
-                if is_bert_punc(c) {
-                    if !cur.is_empty() {
-                        tokens.push(std::mem::take(&mut cur));
-                    }
-                    tokens.push(c.to_string());
-                } else {
-                    cur.push(c);
-                }
-            }
-            if !cur.is_empty() {
-                tokens.push(cur);
-            }
-        }
-        tokens
-    }
-
-    /// Reference `WordPiece` model: greedy longest-match-first with the
-    /// continuing-subword prefix; any unmatched word collapses to `[UNK]`.
-    fn wordpiece(&self, word: &str) -> Vec<u32> {
-        if word.chars().count() > self.max_input_chars_per_word {
-            return vec![self.unk_id];
-        }
-        let mut is_bad = false;
-        let mut start = 0;
-        let mut sub_tokens: Vec<u32> = Vec::new();
-        while start < word.len() {
-            let mut end = word.len();
-            let mut cur_id: Option<u32> = None;
-            while start < end {
-                let sub: &str = &word[start..end];
-                let candidate: String = if start > 0 {
-                    format!("{}{}", self.continuing_subword_prefix, sub)
-                } else {
-                    sub.to_string()
-                };
-                if let Some(&id) = self.vocab.get(&candidate) {
-                    cur_id = Some(id);
-                    break;
-                }
-                end -= sub.chars().last().map_or(1, |c| c.len_utf8());
-            }
-            match cur_id {
-                Some(id) => {
-                    sub_tokens.push(id);
-                    start = end;
-                }
-                None => {
-                    is_bad = true;
-                    break;
-                }
-            }
-        }
-        if is_bad {
-            vec![self.unk_id]
-        } else {
-            sub_tokens
-        }
-    }
-}
-
-/// Pull the id of a named special token from the post-processor.
-fn special_token_id(root: &Value, name: &str) -> Option<u32> {
-    root.get("post_processor")
-        .and_then(|p| p.get("special_tokens"))
-        .and_then(|s| s.get(name))
-        .and_then(|c| c.get("ids"))
-        .and_then(Value::as_array)
-        .and_then(|a| a.first())
-        .and_then(Value::as_u64)
-        .map(|id| id as u32)
-}
-
-/// Whether a character counts as whitespace per the reference `BertNormalizer`.
-fn is_whitespace(c: char) -> bool {
-    matches!(c, '\t' | '\n' | '\r') || c.is_whitespace()
-}
-
-/// Whether a character counts as control per the reference (the Cc/Cf/Cn/Co
-/// "other" categories), mirroring the `unicode-categories` crate used by the
-/// `tokenizers` library.
-fn is_control(c: char) -> bool {
-    match c {
-        '\t' | '\n' | '\r' => false,
-        _ => c.is_other(),
-    }
-}
-
-/// Whether a character is a CJK ideograph per the reference `BasicTokenizer`.
-fn is_chinese_char(c: char) -> bool {
-    matches!(
-        c as u32,
-        0x4E00..=0x9FFF
-            | 0x3400..=0x4DBF
-            | 0x20000..=0x2A6DF
-            | 0x2A700..=0x2B73F
-            | 0x2B740..=0x2B81F
-            | 0x2B920..=0x2CEAF
-            | 0xF900..=0xFAFF
-            | 0x2F800..=0x2FA1F
-    )
-}
-
-/// Whether a character is punctuation per the reference `BertPreTokenizer`.
-fn is_bert_punc(c: char) -> bool {
-    c.is_ascii_punctuation() || c.is_punctuation()
-}
-
-/// Whether a character is a nonspacing combining mark (Mn) per the reference.
-fn is_nonspacing_mark(c: char) -> bool {
-    c.is_mark_nonspacing()
-}
-
-/// Surround CJK ideographs with spaces so they split into single-character
-/// tokens (reference `handle_chinese_chars`).
-fn handle_chinese_chars(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 8);
-    for c in text.chars() {
-        if is_chinese_char(c) {
-            out.push(' ');
-            out.push(c);
-            out.push(' ');
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     const GOLDEN_INPUT: &str = "this is a golden sensitivity input";
 

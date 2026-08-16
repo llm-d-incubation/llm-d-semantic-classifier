@@ -6,28 +6,35 @@
 //!
 //! Per `specs/0.1-mvp/design.md`, the cache key is a versioned fingerprint of
 //! every semantic input to the classification result: classifier/model/
-//! tokenizer/taxonomy revision plus a stable hash of the normalized supplied
-//! context. A raw prompt string must never be the sole cache identity.
+//! tokenizer/taxonomy revision plus the normalized supplied context. A raw
+//! prompt string must never be the sole cache identity.
+//!
+//! The fingerprint is computed with **blake3** (not a `DefaultHasher`): a
+//! `DefaultHasher` is not guaranteed stable across Rust versions, and its 64-bit
+//! output is collision-prone enough to serve a wrong classification under
+//! revision changes. The key is a 32-byte blake3 fingerprint over classifier_id
+//! plus every revision field and the normalized text; each field is length
+//! prefixed so concatenation cannot alias across field boundaries.
+//!
+//! The cache stores the typed [`crate::classify::ClassificationResult`], not a
+//! `String`.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Condvar, Mutex};
 
+use crate::classify::{ClassificationResult, ClassifyError};
+
 /// A versioned fingerprint cache key (design.md).
 ///
-/// The key identifies the classification result by the classifier/model/
-/// tokenizer/taxonomy revisions plus a stable hash of the normalized input
-/// text. Two keys are equal only if every revision and the normalized-text hash
-/// match; a revision change with identical text must yield a different key, so a
-/// stale cached classification is never served under a new revision.
+/// The key is a 32-byte blake3 fingerprint over classifier/model/tokenizer/
+/// taxonomy revisions plus the normalized input text (length-prefixed so field
+/// boundaries cannot collide). Two keys are equal only if the fingerprints
+/// match; a revision change with identical text yields a different fingerprint,
+/// so a stale cached classification is never served under a new revision.
 #[derive(Debug, Clone)]
 pub struct CacheKey {
-    classifier_id: String,
-    model_revision: String,
-    tokenizer_revision: String,
-    taxonomy_revision: String,
-    normalized_text_hash: u64,
+    fingerprint: [u8; 32],
 }
 
 impl CacheKey {
@@ -42,36 +49,40 @@ impl CacheKey {
         taxonomy_revision: impl Into<String>,
         normalized_text: &str,
     ) -> Self {
-        let mut hasher = DefaultHasher::new();
-        normalized_text.hash(&mut hasher);
+        let mut hasher = blake3::Hasher::new();
+        update_field(&mut hasher, &classifier_id.into());
+        update_field(&mut hasher, &model_revision.into());
+        update_field(&mut hasher, &tokenizer_revision.into());
+        update_field(&mut hasher, &taxonomy_revision.into());
+        update_field(&mut hasher, normalized_text);
         CacheKey {
-            classifier_id: classifier_id.into(),
-            model_revision: model_revision.into(),
-            tokenizer_revision: tokenizer_revision.into(),
-            taxonomy_revision: taxonomy_revision.into(),
-            normalized_text_hash: hasher.finish(),
+            fingerprint: hasher.finalize().into(),
         }
     }
+
+    /// The 32-byte blake3 fingerprint used as the cache key.
+    pub fn fingerprint(&self) -> [u8; 32] {
+        self.fingerprint
+    }
+}
+
+/// Update `hasher` with a length-prefixed field so concatenation of adjacent
+/// fields cannot alias (e.g. ("ab","c") vs ("a","bc")).
+fn update_field(hasher: &mut blake3::Hasher, field: &str) {
+    hasher.update(&(field.len() as u64).to_le_bytes());
+    hasher.update(field.as_bytes());
 }
 
 impl PartialEq for CacheKey {
     fn eq(&self, other: &Self) -> bool {
-        self.classifier_id == other.classifier_id
-            && self.model_revision == other.model_revision
-            && self.tokenizer_revision == other.tokenizer_revision
-            && self.taxonomy_revision == other.taxonomy_revision
-            && self.normalized_text_hash == other.normalized_text_hash
+        self.fingerprint == other.fingerprint
     }
 }
 impl Eq for CacheKey {}
 
 impl Hash for CacheKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.classifier_id.hash(state);
-        self.model_revision.hash(state);
-        self.tokenizer_revision.hash(state);
-        self.taxonomy_revision.hash(state);
-        self.normalized_text_hash.hash(state);
+        self.fingerprint.hash(state);
     }
 }
 
@@ -79,9 +90,10 @@ impl Hash for CacheKey {
 ///
 /// AC-006 contract (U-040): a cache HIT must bypass the tokenizer and model
 /// forward. The forward closure is the tokenize + model-forward stage; on a hit
-/// it must not be invoked at all.
+/// it must not be invoked at all. The forward returns a `Result`; only
+/// successful results are stored, failures are returned without caching.
 pub struct ExactCache {
-    entries: HashMap<CacheKey, String>,
+    entries: HashMap<CacheKey, ClassificationResult>,
     forward_count: u64,
     hit_count: u64,
 }
@@ -100,18 +112,30 @@ impl ExactCache {
     ///
     /// On a cache hit the cached result is returned WITHOUT invoking the
     /// forward closure (tokenizer + model forward bypassed). On a miss the
-    /// forward closure is invoked exactly once, its result is stored, and
-    /// returned.
-    pub fn classify(&mut self, key: CacheKey, forward: impl FnOnce() -> String) -> String {
+    /// forward closure is invoked exactly once; a successful result is stored
+    /// and returned, a failure is returned without caching (never fabricated).
+    pub fn classify(
+        &mut self,
+        key: CacheKey,
+        forward: impl FnOnce() -> Result<ClassificationResult, ClassifyError>,
+    ) -> Result<ClassificationResult, ClassifyError> {
         // AC-006: a cache HIT must bypass the tokenizer and model forward.
         if let Some(cached) = self.entries.get(&key) {
             self.hit_count += 1;
-            return cached.clone();
+            return Ok(cached.clone());
         }
         // Miss: run the forward exactly once, store, and return.
         let result = forward();
-        self.forward_count += 1;
-        self.entries.insert(key, result.clone());
+        match &result {
+            Ok(result) => {
+                self.forward_count += 1;
+                self.entries.insert(key, result.clone());
+            }
+            Err(_) => {
+                // A failed forward is not cached; the error is explicit.
+                self.forward_count += 1;
+            }
+        }
         result
     }
 
@@ -128,13 +152,17 @@ impl ExactCache {
 
     /// Read a cached result without recording a hit or running a forward.
     /// Used by the concurrent `SharedCache` fast path (AC-007).
-    pub(crate) fn cached_value(&self, key: &CacheKey) -> Option<String> {
+    pub(crate) fn cached_value(&self, key: &CacheKey) -> Option<ClassificationResult> {
         self.entries.get(key).cloned()
     }
 
-    /// Record a forward and store its freshly-computed result.
+    /// Record a forward and store its freshly-computed successful result.
     /// Used by the concurrent `SharedCache` after it runs the forward (AC-007).
-    pub(crate) fn store_after_forward(&mut self, key: CacheKey, result: String) -> String {
+    pub(crate) fn store_after_forward(
+        &mut self,
+        key: CacheKey,
+        result: ClassificationResult,
+    ) -> ClassificationResult {
         self.forward_count += 1;
         self.entries.insert(key, result.clone());
         result
@@ -149,15 +177,22 @@ impl ExactCache {
 /// A per-key single-flight slot (single-flight) is used so the first miss for a
 /// key runs the forward once while the other identical misses wait for its
 /// result.
+///
+/// [`Clone`] is derived (both fields are [`Arc`]s) so the cache can be shared by
+/// a [`crate::classify::ClassifyService`] that must itself be `Clone` to back a
+/// tonic server.
+#[derive(Clone)]
 pub struct SharedCache {
     inner: Arc<Mutex<ExactCache>>,
     in_flight: Arc<Mutex<HashMap<CacheKey, Arc<InFlight>>>>,
 }
 
 /// A single-flight slot for one cache key: the shared result (initially empty)
-/// and a condvar that the waiting callers observe.
+/// and a condvar that the waiting callers observe. The shared result is the
+/// full `Result` (success or the explicit error) so every waiting caller
+/// receives the same outcome.
 struct InFlight {
-    result: Mutex<Option<String>>,
+    result: Mutex<Option<Result<ClassificationResult, ClassifyError>>>,
     condvar: Condvar,
 }
 
@@ -176,13 +211,18 @@ impl SharedCache {
     /// caller for `key` runs the forward closure once (single-flight); every
     /// other identical concurrent miss waits for and reads that shared result
     /// instead of running its own forward. This bounds identical concurrent
-    /// misses to ONE forward per distinct key (AC-007).
-    pub fn classify_concurrent(&self, key: CacheKey, forward: impl FnOnce() -> String) -> String {
+    /// misses to ONE forward per distinct key (AC-007). A failed forward is
+    /// propagated to every caller and is NOT cached.
+    pub fn classify_concurrent(
+        &self,
+        key: CacheKey,
+        forward: impl FnOnce() -> Result<ClassificationResult, ClassifyError>,
+    ) -> Result<ClassificationResult, ClassifyError> {
         // Fast path: serve an already-cached result.
         {
             let inner = self.inner.lock().unwrap();
             if let Some(cached) = inner.cached_value(&key) {
-                return cached;
+                return Ok(cached);
             }
         }
         // Single-flight: if another thread is already forwarding this key, wait
@@ -210,9 +250,10 @@ impl SharedCache {
         }
         // We are the designated forwarder: run the forward exactly once.
         let result = forward();
-        let mut inner = self.inner.lock().unwrap();
-        inner.store_after_forward(key.clone(), result.clone());
-        drop(inner);
+        if let Ok(result) = &result {
+            let mut inner = self.inner.lock().unwrap();
+            inner.store_after_forward(key.clone(), result.clone());
+        }
         // Publish the result to the waiting callers and remove the in-flight slot.
         let slot = {
             let mut in_flight = self.in_flight.lock().unwrap();
@@ -246,15 +287,32 @@ impl Default for ExactCache {
 #[cfg(test)]
 mod tests {
     use super::{CacheKey, ExactCache, SharedCache};
+    use crate::classify::{ClassificationResult, ClassifyError, ClassifyStatus, RankedSignal};
     use std::sync::{Arc, Barrier};
     use std::thread;
+
+    /// A typed successful classification result for cache tests.
+    fn result(id: &str) -> ClassificationResult {
+        ClassificationResult {
+            classifier_id: "clf".to_string(),
+            model_revision: "model-rev".to_string(),
+            tokenizer_revision: "tok-rev".to_string(),
+            taxonomy_revision: "tax-rev".to_string(),
+            status: ClassifyStatus::Ok,
+            ranked: vec![RankedSignal {
+                id: id.to_string(),
+                score: 1.0,
+            }],
+        }
+    }
 
     #[test]
     fn u040_exact_cache_hit_bypasses_tokenizer_and_runtime() {
         // U-040 (AC-006): an exact cache hit must bypass the tokenizer and the
         // model forward. The forward closure stands in for the tokenize +
         // model-forward stage; it must run exactly ONCE (on the miss) and must
-        // NOT run again when the identical input is served from the cache.
+        // NOT run again when the identical input is served from the cache. The
+        // cache stores the typed ClassificationResult.
         let mut cache = ExactCache::new();
         let key = CacheKey::new(
             "clf",
@@ -265,7 +323,9 @@ mod tests {
         );
 
         // First call: a miss, so tokenizer + model forward must run once.
-        let first = cache.classify(key.clone(), || "result".to_string());
+        let first = cache
+            .classify(key.clone(), || Ok(result("sensitivity")))
+            .expect("first classify must succeed");
         assert_eq!(
             cache.forward_count(),
             1,
@@ -274,7 +334,9 @@ mod tests {
 
         // Second identical call: a HIT. The tokenizer/model forward must be
         // bypassed entirely and the cached result returned unchanged.
-        let second = cache.classify(key.clone(), || "result".to_string());
+        let second = cache
+            .classify(key.clone(), || Ok(result("sensitivity")))
+            .expect("second classify must succeed");
         assert_eq!(
             cache.forward_count(),
             1,
@@ -309,8 +371,12 @@ mod tests {
             "a model/classifier revision change must change the cache key"
         );
 
-        cache.classify(key_a.clone(), || "result".to_string());
-        cache.classify(key_b.clone(), || "result".to_string());
+        cache
+            .classify(key_a.clone(), || Ok(result("result")))
+            .unwrap();
+        cache
+            .classify(key_b.clone(), || Ok(result("result")))
+            .unwrap();
         assert_eq!(
             cache.forward_count(),
             2,
@@ -333,8 +399,12 @@ mod tests {
             "a tokenizer revision change must change the cache key"
         );
 
-        cache.classify(key_a.clone(), || "result".to_string());
-        cache.classify(key_b.clone(), || "result".to_string());
+        cache
+            .classify(key_a.clone(), || Ok(result("result")))
+            .unwrap();
+        cache
+            .classify(key_b.clone(), || Ok(result("result")))
+            .unwrap();
         assert_eq!(
             cache.forward_count(),
             2,
@@ -357,8 +427,12 @@ mod tests {
             "a taxonomy/prototype revision change must change the cache key"
         );
 
-        cache.classify(key_a.clone(), || "result".to_string());
-        cache.classify(key_b.clone(), || "result".to_string());
+        cache
+            .classify(key_a.clone(), || Ok(result("result")))
+            .unwrap();
+        cache
+            .classify(key_b.clone(), || Ok(result("result")))
+            .unwrap();
         assert_eq!(
             cache.forward_count(),
             2,
@@ -402,12 +476,13 @@ mod tests {
                 cache.classify_concurrent(key, || {
                     // Hold the forward stage open so concurrent misses overlap.
                     std::thread::sleep(std::time::Duration::from_millis(250));
-                    "result".to_string()
+                    Ok(result("sensitivity"))
                 })
             }));
         }
 
-        let results: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let results: Vec<Result<ClassificationResult, ClassifyError>> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
 
         assert_eq!(
             cache.forward_count(),
@@ -416,7 +491,9 @@ mod tests {
             CONCURRENCY
         );
         assert!(
-            results.iter().all(|r| r == "result"),
+            results
+                .iter()
+                .all(|r| matches!(r, Ok(c) if c.ranked.first().map(|s| s.id.as_str()) == Some("sensitivity"))),
             "every concurrent caller must receive the same classification result"
         );
     }

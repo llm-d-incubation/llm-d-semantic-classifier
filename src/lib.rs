@@ -5,8 +5,10 @@
 //! Candle backend arrive in later acceptance criteria.
 
 pub mod cache;
+pub mod classify;
 pub mod config;
 pub mod embedding;
+pub mod grpc;
 pub mod queue;
 pub mod ranker;
 pub mod runtime;
