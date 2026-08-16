@@ -211,3 +211,8 @@ Coverage percentage is diagnostic, not proof. Required instead:
 - public behavior has integration tests;
 - every explicit failure state is exercised;
 - existing assertion changes receive privileged review.
+
+## Adjudications
+- **U-010 / AC-010**: resolved by `docs/decisions/0001-no-route-field-in-response.md` —
+  the response schema must not contain a route/endpoint field at all (not merely
+  "never set"). A schema-level test is the required proof.

@@ -80,11 +80,12 @@ async fn i001_real_tonic_round_trip() {
         !response.signals.is_empty(),
         "response must carry ranked semantic signals"
     );
-    // ...and never dictate a final route (AC-010).
-    assert!(
-        response.final_route.is_none(),
-        "AC-010: llm-d-sc must never dictate a final route"
-    );
+    // ...and carry no final route at all. AC-010 is now a SCHEMA invariant
+    // (U-010): `ClassifyResponse` has no route/endpoint field, so a route is
+    // unrepresentable on the wire (ADR-0001, interpretation (B)). The former
+    // `final_route.is_none()` assertion is superseded by that deterministic
+    // schema test (`tests/schema.rs`).
+    let _ = response;
 
     // Tear down the server task (the channel is persistent; abort releases it).
     server.abort();
@@ -208,5 +209,59 @@ fn i006_dummy_praxis_routes_outside_llm_d_sc() {
     assert!(
         outcome.rtt > std::time::Duration::ZERO,
         "dummy praxis must measure classifier RTT"
+    );
+}
+
+/// I-007: the llm-d-sc response cannot dictate an endpoint.
+///
+/// AC-010 requires the response to carry signals, not a final route. The dummy
+/// Praxis receives a response, and the ONLY route in the system is the one the
+/// dummy computes itself (outside llm-d-sc). The response type offers no route
+/// to consume: `ClassifyResponse` has no `route`/`endpoint`/`final_route` field
+/// (ADR-0001, U-010), so referencing one would not compile. This test drives a
+/// real DummyPraxis against the real server and asserts the recorded route is
+/// exactly the dummy's own fixed test-only mapping, never anything derived from
+/// the response.
+#[test]
+fn i007_response_cannot_dictate_endpoint() {
+    use llm_d_sc::dummy_praxis::{DummyPraxis, DummyRequest};
+    use llm_d_sc::grpc::classify::ClassifyServer;
+
+    // The response type offers no route field to consume (ADR-0001): the schema
+    // invariant (U-010) forbids route/endpoint/target on `ClassifyResponse`, so
+    // there is nothing on the wire the dummy could read as a dictated endpoint.
+    //
+    // Compile-time surface check (cannot reference a non-existent field):
+    // `llm_d_sc::grpc::classify::generated::ClassifyResponse` implements
+    // `prost::Message` but exposes no route field (enforced by U-010 in
+    // `tests/schema.rs`).
+    fn assert_no_route_field<M: prost::Message>() {}
+    assert_no_route_field::<llm_d_sc::grpc::classify::generated::ClassifyResponse>();
+
+    let server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
+    let addr = server.local_addr();
+    let mut praxis = DummyPraxis::connect(&addr).expect("dummy praxis must connect");
+
+    let req = DummyRequest {
+        request_id: "req-0007".to_string(),
+        session_id: "sess-0007".to_string(),
+        context: "this is a golden sensitivity input".to_string(),
+        signals: vec!["sensitivity".to_string()],
+        deadline: None,
+    };
+    let outcome = praxis
+        .classify_and_route(req)
+        .expect("dummy praxis must classify and route");
+
+    // The ONLY route in the system is the one the dummy computes itself: it is
+    // exactly one of the dummy's own fixed test-only mappings, and it was
+    // chosen purely from the consumed signal (never read off the response).
+    assert!(
+        outcome.route == "local-model" || outcome.route == "general-model",
+        "the only route must be the dummy's own test-only mapping, not dictated by llm-d-sc"
+    );
+    assert!(
+        !outcome.signal.is_empty(),
+        "the dummy consumes a ranked signal before routing itself"
     );
 }

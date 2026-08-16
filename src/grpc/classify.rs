@@ -84,10 +84,12 @@ impl generated::classify_server::Classify for ClassifyServiceImpl {
             .service
             .classify(input)
             .map_err(|e| tonic::Status::unavailable(e.to_string()))?;
+        // The response schema carries request_id + ranked signals only; it has
+        // no route field at all (ADR-0001, AC-010), so a route is
+        // unrepresentable on the wire.
         let response = generated::ClassifyResponse {
             request_id: req.request_id,
             signals: result.ranked.iter().map(|s| s.id.clone()).collect(),
-            final_route: None,
         };
         Ok(tonic::Response::new(response))
     }

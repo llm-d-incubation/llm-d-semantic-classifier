@@ -14,12 +14,15 @@ message ClassifyRequest {
 }
 
 // The semantic evidence produced by llm-d-sc.
+//
+// Carries request_id and ranked semantic signal names only. The schema contains
+// NO route/endpoint field (ADR-0001, AC-010): routing/session authority stays
+// with Praxis, and a route is unrepresentable on the wire rather than merely
+// discouraged.
 message ClassifyResponse {
   string request_id = 1;
   // Ranked semantic signal names; never a final route (AC-010).
   repeated string signals = 2;
-  // llm-d-sc must NEVER set this field: routing/session authority is Praxis.
-  optional string final_route = 3;
 }
 
 service Classify {
