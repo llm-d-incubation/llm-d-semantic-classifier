@@ -15,6 +15,7 @@ FILES=(
   "model.safetensors"
   "tokenizer.json"
   "config.json"
+  "modules.json"
   "1_Pooling/config.json"
 )
 
@@ -38,7 +39,7 @@ import sys
 from huggingface_hub import hf_hub_download
 
 repo, rev, target = sys.argv[1], sys.argv[2], sys.argv[3]
-for name in ("model.safetensors", "tokenizer.json", "config.json"):
+for name in ("model.safetensors", "tokenizer.json", "config.json", "modules.json"):
     hf_hub_download(
         repo_id=repo, revision=rev, filename=name,
         local_dir=target,

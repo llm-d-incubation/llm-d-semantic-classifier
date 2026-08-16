@@ -150,7 +150,13 @@ impl Embedder {
 
         let pooled = mean_pool(&sequence, &attention_mask).map_err(EmbeddingError::Candle)?;
         let flat = pooled.squeeze(0).map_err(EmbeddingError::Candle)?;
-        flat.to_vec1::<f32>().map_err(EmbeddingError::Candle)
+        // The classifier definition (`modules.json`) declares a Normalize module,
+        // so the returned embedding is L2-normalized to unit norm.
+        let norm = flat.norm().map_err(EmbeddingError::Candle)?;
+        let normalized = flat
+            .broadcast_div(&norm.unsqueeze(0).map_err(EmbeddingError::Candle)?)
+            .map_err(EmbeddingError::Candle)?;
+        normalized.to_vec1::<f32>().map_err(EmbeddingError::Candle)
     }
 }
 
@@ -285,6 +291,39 @@ mod tests {
         assert!(
             norm_diff <= 1e-3,
             "l2 norm diff {norm_diff} exceeds 1e-3 (got {norm}, want {l2_norm})"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn u063_embedding_normalization_matches_classifier_definition() {
+        // U-063 (AC-004): the resident model's `modules.json` (pinned HF rev
+        // 43f21d2...) declares a `sentence_transformers.models.Normalize` module
+        // at idx 2, so the classifier definition is L2-NORMALIZED embeddings.
+        // `embed()` must therefore emit an embedding whose L2 norm is ~1.0, NOT
+        // the raw masked-mean-pooled vector (which has norm ~5.76). Requires the
+        // local weights (gitignored), so the test is #[ignore]d and run
+        // explicitly with `-- --ignored` after `./hack/fetch-model`.
+        let embedder = Embedder::load(
+            artifact("config.json"),
+            artifact("model.safetensors"),
+            fixture("tokenizer.json"),
+            artifact("1_Pooling/config.json"),
+        )
+        .expect("embedder must load from the fetched sensitivity model");
+
+        let vec = embedder
+            .embed(GOLDEN_INPUT)
+            .expect("golden input must embed");
+        let norm: f64 = vec
+            .iter()
+            .map(|v| f64::from(*v) * f64::from(*v))
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            (norm - 1.0).abs() <= 1e-3,
+            "embed() must emit an L2-normalized embedding per the classifier's Normalize \
+             module (got norm {norm}, want ~1.0)"
         );
     }
 }

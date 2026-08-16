@@ -11,28 +11,31 @@
   102
  ],
  "first16": [
-  0.03096645511686802,
-  -0.36899229884147644,
-  -0.17360764741897583,
-  -0.0785096138715744,
-  0.01041504554450512,
-  0.035594310611486435,
-  0.49455371499061584,
-  -0.11609575897455215,
-  0.1722133606672287,
-  -0.25862497091293335,
-  0.190839484333992,
-  -0.07765913009643555,
-  0.35112759470939636,
-  0.2865524888038635,
-  -0.674822986125946,
-  0.32839009165763855
+  0.005377377383410931,
+  -0.06407523900270462,
+  -0.030146842822432518,
+  -0.013633063063025475,
+  0.001808518311008811,
+  0.0061809103935956955,
+  0.08587882667779922,
+  -0.02015993371605873,
+  0.029904676601290703,
+  -0.0449099987745285,
+  0.03313903138041496,
+  -0.013485409319400787,
+  0.060972973704338074,
+  0.049759577959775925,
+  -0.11718235164880753,
+  0.057024627923965454
  ],
- "l2_norm": 5.758739471435547,
+ "l2_norm": 0.9999999870516274,
  "dim": 384,
  "provenance": {
-  "stack": "transformers AutoModel (local_files_only) + PreTrainedTokenizerFast on the PINNED tokenizer.json (verified byte-identical to HF rev 43f21d2) + masked mean pooling",
-  "prior_bug": "first reference generated with missing tokenizer.json -> all-UNK ids; caught by U-061 parity failure",
+  "stack": "sentence-transformers SentenceTransformer.encode (FULL module stack: Transformer + Pooling + 2_Normalize per modules.json at pinned rev 43f21d2)",
+  "history": [
+   "v1: broken (missing tokenizer -> all-UNK) \u2014 caught by U-061",
+   "v2: incomplete (raw mean-pool, omitted the model's 2_Normalize module) \u2014 caught by U-063/U-061 reconciliation; modules.json is authoritative"
+  ],
   "generated_by": "reviewer reference script 2026-08-15"
  }
 }
