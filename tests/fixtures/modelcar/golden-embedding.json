@@ -1,0 +1,38 @@
+{
+ "input": "this is a golden sensitivity input",
+ "input_ids": [
+  101,
+  2023,
+  2003,
+  1037,
+  3585,
+  14639,
+  7953,
+  102
+ ],
+ "first16": [
+  0.03096645511686802,
+  -0.36899229884147644,
+  -0.17360764741897583,
+  -0.0785096138715744,
+  0.01041504554450512,
+  0.035594310611486435,
+  0.49455371499061584,
+  -0.11609575897455215,
+  0.1722133606672287,
+  -0.25862497091293335,
+  0.190839484333992,
+  -0.07765913009643555,
+  0.35112759470939636,
+  0.2865524888038635,
+  -0.674822986125946,
+  0.32839009165763855
+ ],
+ "l2_norm": 5.758739471435547,
+ "dim": 384,
+ "provenance": {
+  "stack": "transformers AutoModel (local_files_only) + PreTrainedTokenizerFast on the PINNED tokenizer.json (verified byte-identical to HF rev 43f21d2) + masked mean pooling",
+  "prior_bug": "first reference generated with missing tokenizer.json -> all-UNK ids; caught by U-061 parity failure",
+  "generated_by": "reviewer reference script 2026-08-15"
+ }
+}

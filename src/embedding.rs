@@ -213,4 +213,78 @@ mod tests {
             "real forward embedding length must match word_embedding_dimension"
         );
     }
+
+    #[test]
+    #[ignore]
+    fn u061_pooling_output_matches_trusted_reference() {
+        // U-061 (AC-004): the resident model's real pooling output must match the
+        // trusted reference embedding fixture (`tests/fixtures/modelcar/golden-embedding.json`,
+        // produced by `artifacts/u061_tight.sh`) within tight tolerance. This requires
+        // the local model weights (gitignored), so the test is #[ignore]d and run
+        // explicitly with `-- --ignored` after `./hack/fetch-model`.
+        let embedder = Embedder::load(
+            artifact("config.json"),
+            artifact("model.safetensors"),
+            fixture("tokenizer.json"),
+            artifact("1_Pooling/config.json"),
+        )
+        .expect("embedder must load from the fetched sensitivity model");
+
+        let raw = std::fs::read_to_string(fixture("golden-embedding.json"))
+            .expect("golden embedding fixture must exist");
+        let root: serde_json::Value =
+            serde_json::from_str(&raw).expect("golden embedding fixture must be valid JSON");
+        let input = root
+            .get("input")
+            .and_then(serde_json::Value::as_str)
+            .expect("fixture input");
+        let first16: Vec<f64> = root
+            .get("first16")
+            .and_then(serde_json::Value::as_array)
+            .expect("fixture first16")
+            .iter()
+            .map(|v| v.as_f64().expect("first16 value"))
+            .collect();
+        assert_eq!(
+            first16.len(),
+            16,
+            "reference fixture must have exactly 16 dims"
+        );
+        let l2_norm = root
+            .get("l2_norm")
+            .and_then(serde_json::Value::as_f64)
+            .expect("fixture l2_norm");
+        let dim = root
+            .get("dim")
+            .and_then(serde_json::Value::as_u64)
+            .expect("fixture dim") as usize;
+
+        let vec = embedder.embed(input).expect("fixture input must embed");
+        assert_eq!(
+            vec.len(),
+            dim,
+            "embedding dim must match the fixture's declared dim"
+        );
+
+        // First 16 dims each within 1e-4 of the trusted reference.
+        for (i, (got, want)) in vec.iter().zip(first16.iter()).enumerate() {
+            let diff = (f64::from(*got) - want).abs();
+            assert!(
+                diff <= 1e-4,
+                "dim {i} diff {diff} exceeds 1e-4 (got {got}, want {want})"
+            );
+        }
+
+        // Full-vector L2 norm within 1e-3 of the trusted reference.
+        let norm: f64 = vec
+            .iter()
+            .map(|v| f64::from(*v) * f64::from(*v))
+            .sum::<f64>()
+            .sqrt();
+        let norm_diff = (norm - l2_norm).abs();
+        assert!(
+            norm_diff <= 1e-3,
+            "l2 norm diff {norm_diff} exceeds 1e-3 (got {norm}, want {l2_norm})"
+        );
+    }
 }
