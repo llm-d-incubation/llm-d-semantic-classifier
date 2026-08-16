@@ -12,6 +12,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Condvar, Mutex};
 
 /// A versioned fingerprint cache key (design.md).
 ///
@@ -124,6 +125,116 @@ impl ExactCache {
     pub fn hit_count(&self) -> u64 {
         self.hit_count
     }
+
+    /// Read a cached result without recording a hit or running a forward.
+    /// Used by the concurrent `SharedCache` fast path (AC-007).
+    pub(crate) fn cached_value(&self, key: &CacheKey) -> Option<String> {
+        self.entries.get(key).cloned()
+    }
+
+    /// Record a forward and store its freshly-computed result.
+    /// Used by the concurrent `SharedCache` after it runs the forward (AC-007).
+    pub(crate) fn store_after_forward(&mut self, key: CacheKey, result: String) -> String {
+        self.forward_count += 1;
+        self.entries.insert(key, result.clone());
+        result
+    }
+}
+
+/// A shared exact cache that can be called concurrently from multiple threads.
+///
+/// AC-007 requires that identical concurrent misses do not create unbounded
+/// forwards: when N identical requests miss simultaneously, they must be
+/// coalesced into ONE forward rather than N redundant tokenizer/model forwards.
+/// A per-key single-flight slot (single-flight) is used so the first miss for a
+/// key runs the forward once while the other identical misses wait for its
+/// result.
+pub struct SharedCache {
+    inner: Arc<Mutex<ExactCache>>,
+    in_flight: Arc<Mutex<HashMap<CacheKey, Arc<InFlight>>>>,
+}
+
+/// A single-flight slot for one cache key: the shared result (initially empty)
+/// and a condvar that the waiting callers observe.
+struct InFlight {
+    result: Mutex<Option<String>>,
+    condvar: Condvar,
+}
+
+impl SharedCache {
+    /// An empty shared cache.
+    pub fn new() -> Self {
+        SharedCache {
+            inner: Arc::new(Mutex::new(ExactCache::new())),
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Classify `key` concurrently, returning the classification result.
+    ///
+    /// Serves an already-cached result on the fast path. On a miss, the FIRST
+    /// caller for `key` runs the forward closure once (single-flight); every
+    /// other identical concurrent miss waits for and reads that shared result
+    /// instead of running its own forward. This bounds identical concurrent
+    /// misses to ONE forward per distinct key (AC-007).
+    pub fn classify_concurrent(&self, key: CacheKey, forward: impl FnOnce() -> String) -> String {
+        // Fast path: serve an already-cached result.
+        {
+            let inner = self.inner.lock().unwrap();
+            if let Some(cached) = inner.cached_value(&key) {
+                return cached;
+            }
+        }
+        // Single-flight: if another thread is already forwarding this key, wait
+        // for and read its shared result instead of forwarding again.
+        let wait_slot = {
+            let mut in_flight = self.in_flight.lock().unwrap();
+            match in_flight.get(&key) {
+                Some(slot) => Some(Arc::clone(slot)),
+                None => {
+                    let slot = Arc::new(InFlight {
+                        result: Mutex::new(None),
+                        condvar: Condvar::new(),
+                    });
+                    in_flight.insert(key.clone(), Arc::clone(&slot));
+                    None
+                }
+            }
+        };
+        if let Some(slot) = wait_slot {
+            let mut result = slot.result.lock().unwrap();
+            while result.is_none() {
+                result = slot.condvar.wait(result).unwrap();
+            }
+            return result.clone().unwrap();
+        }
+        // We are the designated forwarder: run the forward exactly once.
+        let result = forward();
+        let mut inner = self.inner.lock().unwrap();
+        inner.store_after_forward(key.clone(), result.clone());
+        drop(inner);
+        // Publish the result to the waiting callers and remove the in-flight slot.
+        let slot = {
+            let mut in_flight = self.in_flight.lock().unwrap();
+            in_flight.remove(&key).unwrap()
+        };
+        let mut result_guard = slot.result.lock().unwrap();
+        *result_guard = Some(result.clone());
+        drop(result_guard);
+        slot.condvar.notify_all();
+        result
+    }
+
+    /// Number of times the tokenizer/model forward was invoked (all threads).
+    pub fn forward_count(&self) -> u64 {
+        self.inner.lock().unwrap().forward_count()
+    }
+}
+
+impl Default for SharedCache {
+    fn default() -> Self {
+        SharedCache::new()
+    }
 }
 
 impl Default for ExactCache {
@@ -134,7 +245,9 @@ impl Default for ExactCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheKey, ExactCache};
+    use super::{CacheKey, ExactCache, SharedCache};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     #[test]
     fn u040_exact_cache_hit_bypasses_tokenizer_and_runtime() {
@@ -250,6 +363,61 @@ mod tests {
             cache.forward_count(),
             2,
             "a taxonomy/prototype revision change must not serve the stale cached result (miss)"
+        );
+    }
+
+    #[test]
+    fn u041_identical_concurrent_misses_coalesce() {
+        // U-041 (AC-007): identical concurrent MISSES on an empty cache must be
+        // coalesced into a SINGLE forward, not one forward per request. N
+        // simultaneous misses on the same key must produce exactly ONE
+        // tokenizer/model forward (bounded), and every caller must receive the
+        // same result.
+        const CONCURRENCY: usize = 8;
+        let cache = Arc::new(SharedCache::new());
+        let key = CacheKey::new(
+            "clf",
+            "model-rev",
+            "tok-rev",
+            "tax-rev",
+            "same sensitivity input",
+        );
+
+        // A barrier synchronizes all N threads so they reach `classify_concurrent`
+        // together as concurrent misses. The barrier is OUTSIDE the forward
+        // closure: a correct single-flight cache runs the forward on exactly one
+        // thread, so an N-way barrier INSIDE the forward would deadlock (only one
+        // thread ever arrives). To still guarantee the misses genuinely overlap, the
+        // forward closure holds the forward stage open for a generous duration, so
+        // every concurrent miss enters the forward stage before the first one
+        // completes and stores (forcing N redundant forwards on the buggy cache).
+        let barrier = Arc::new(Barrier::new(CONCURRENCY));
+        let mut handles = Vec::new();
+        for _ in 0..CONCURRENCY {
+            let cache = Arc::clone(&cache);
+            let key = key.clone();
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                cache.classify_concurrent(key, || {
+                    // Hold the forward stage open so concurrent misses overlap.
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    "result".to_string()
+                })
+            }));
+        }
+
+        let results: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        assert_eq!(
+            cache.forward_count(),
+            1,
+            "identical concurrent misses must coalesce into ONE forward, not {}",
+            CONCURRENCY
+        );
+        assert!(
+            results.iter().all(|r| r == "result"),
+            "every concurrent caller must receive the same classification result"
         );
     }
 }
