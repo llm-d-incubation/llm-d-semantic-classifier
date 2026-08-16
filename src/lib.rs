@@ -6,5 +6,6 @@
 
 pub mod config;
 pub mod embedding;
+pub mod ranker;
 pub mod runtime;
 pub mod tokenizer;

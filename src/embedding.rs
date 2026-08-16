@@ -294,6 +294,110 @@ mod tests {
         );
     }
 
+    fn synthetic_prototypes() -> Vec<crate::ranker::Prototype> {
+        let raw = std::fs::read_to_string(fixture("synthetic-prototypes.json"))
+            .expect("synthetic prototype fixture must exist");
+        let root: serde_json::Value =
+            serde_json::from_str(&raw).expect("synthetic prototype fixture must be valid JSON");
+        assert_eq!(
+            root.get("label").and_then(serde_json::Value::as_str),
+            Some("synthetic_for_mechanics_only")
+        );
+        root.get("prototypes")
+            .and_then(serde_json::Value::as_array)
+            .expect("prototypes array")
+            .iter()
+            .map(|obj| {
+                let id = obj
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("prototype id")
+                    .to_string();
+                let vector: Vec<f32> = obj
+                    .get("vector")
+                    .and_then(serde_json::Value::as_array)
+                    .expect("prototype vector")
+                    .iter()
+                    .map(|v| v.as_f64().expect("vector value") as f32)
+                    .collect();
+                crate::ranker::Prototype::new(id, vector)
+            })
+            .collect()
+    }
+
+    #[test]
+    #[ignore]
+    fn u067_golden_fixture_ranking_matches_reference() {
+        // U-067 (AC-004): the resident model's real forward, embedded with the
+        // same golden input used by the golden embedding fixture, must cosine-rank
+        // the synthetic prototypes in EXACTLY the reference order, and each score
+        // must be within 1e-4 of the reference fixture
+        // (`tests/fixtures/modelcar/golden-ranking.json`, produced by the pinned
+        // sentence-transformers stack). Requires the local model weights
+        // (gitignored), so the test is #[ignore]d and run explicitly with
+        // `-- --ignored` after `./hack/fetch-model`.
+        let embedder = Embedder::load(
+            artifact("config.json"),
+            artifact("model.safetensors"),
+            fixture("tokenizer.json"),
+            artifact("1_Pooling/config.json"),
+        )
+        .expect("embedder must load from the fetched sensitivity model");
+
+        let raw = std::fs::read_to_string(fixture("golden-ranking.json"))
+            .expect("golden ranking fixture must exist");
+        let root: serde_json::Value =
+            serde_json::from_str(&raw).expect("golden ranking fixture must be valid JSON");
+        assert_eq!(
+            root.get("input").and_then(serde_json::Value::as_str),
+            Some(GOLDEN_INPUT),
+            "fixture input must be the golden input"
+        );
+        let want: Vec<(String, f64)> = root
+            .get("ranking")
+            .and_then(serde_json::Value::as_array)
+            .expect("ranking array")
+            .iter()
+            .map(|obj| {
+                let id = obj
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("ranking id")
+                    .to_string();
+                let score = obj
+                    .get("score")
+                    .and_then(serde_json::Value::as_f64)
+                    .expect("ranking score");
+                (id, score)
+            })
+            .collect();
+        assert_eq!(want.len(), 4, "fixture must rank 4 prototypes");
+
+        let vec = embedder
+            .embed(GOLDEN_INPUT)
+            .expect("golden input must embed");
+        let prototypes = synthetic_prototypes();
+        let got = crate::ranker::cosine_rank(&vec, &prototypes);
+
+        // Exact order must match the reference ranking.
+        let got_ids: Vec<&str> = got.iter().map(|(id, _)| id.as_str()).collect();
+        let want_ids: Vec<&str> = want.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            got_ids, want_ids,
+            "ranking order must match the golden fixture exactly"
+        );
+
+        // Each score within 1e-4 of the reference.
+        for (i, ((gid, gscore), (wid, wscore))) in got.iter().zip(want.iter()).enumerate() {
+            assert_eq!(gid, wid, "rank {i} id mismatch");
+            let diff = (gscore - wscore).abs();
+            assert!(
+                diff <= 1e-4,
+                "rank {i} ({gid}) score diff {diff} exceeds 1e-4 (got {gscore}, want {wscore})"
+            );
+        }
+    }
+
     #[test]
     #[ignore]
     fn u063_embedding_normalization_matches_classifier_definition() {

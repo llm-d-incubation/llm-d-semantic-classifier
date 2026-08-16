@@ -1,0 +1,32 @@
+{
+ "embedding_dim": 384,
+ "embedding_l2_norm": 0.9999999870516274,
+ "input": "this is a golden sensitivity input",
+ "prototype_label": "synthetic_for_mechanics_only",
+ "prototype_source": "tests/fixtures/modelcar/synthetic-prototypes.json",
+ "provenance": {
+  "date": "2026-08-16",
+  "generated_by": "artifacts/gen_golden_ranking.py (exact commands in the script header)",
+  "input": "this is a golden sensitivity input",
+  "prototypes": "SYNTHETIC for mechanics only (label synthetic_for_mechanics_only); NOT a real taxonomy",
+  "stack": "sentence-transformers SentenceTransformer.encode (FULL module stack: Transformer + Pooling + 2_Normalize per modules.json at pinned rev 43f21d2)"
+ },
+ "ranking": [
+  {
+   "id": "proto-a",
+   "score": 0.005377377453039217
+  },
+  {
+   "id": "proto-d",
+   "score": -0.013633063239551458
+  },
+  {
+   "id": "proto-c",
+   "score": -0.030146843212785077
+  },
+  {
+   "id": "proto-b",
+   "score": -0.0640752398323747
+  }
+ ]
+}
