@@ -45,7 +45,10 @@ fn fixture_request(request_id: &str, session_id: &str) -> ClassifyRequest {
 #[tokio::test]
 async fn i001_real_tonic_round_trip() {
     // The pipeline-backed tonic classify service.
-    let service = ClassifyServiceImpl::new(ClassifyService::from_synthetic_fixtures());
+    let service = ClassifyServiceImpl::new(
+        ClassifyService::from_synthetic_fixtures(),
+        llm_d_sc::telemetry::Telemetry::new(),
+    );
     let tonic_server = generated::classify_server::ClassifyServer::new(service);
 
     // Bind an ephemeral localhost port and serve in the background.

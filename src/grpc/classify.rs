@@ -24,6 +24,7 @@ use std::io;
 
 use crate::classify::ClassifierRuntime;
 use crate::metrics::{Metrics, MetricsSnapshot};
+use crate::telemetry::{RequestEvent, Telemetry, TraceEvent};
 
 /// Generated protobuf messages and tonic service/client code (from
 /// `proto/classify.proto`, produced by `build.rs`).
@@ -47,6 +48,7 @@ pub struct ClassifyServer {
     _runtime: tokio::runtime::Runtime,
     addr: std::net::SocketAddr,
     metrics: Metrics,
+    telemetry: Telemetry,
 }
 
 /// The pipeline-backed tonic classify service.
@@ -57,12 +59,14 @@ pub struct ClassifyServer {
 #[derive(Clone)]
 pub struct ClassifyServiceImpl {
     service: crate::classify::ClassifyService,
+    telemetry: Telemetry,
 }
 
 impl ClassifyServiceImpl {
-    /// Build a classify service backed by the given pipeline.
-    pub fn new(service: crate::classify::ClassifyService) -> Self {
-        Self { service }
+    /// Build a classify service backed by the given pipeline and telemetry
+    /// recorder (AC-014).
+    pub fn new(service: crate::classify::ClassifyService, telemetry: Telemetry) -> Self {
+        Self { service, telemetry }
     }
 }
 
@@ -73,6 +77,14 @@ impl generated::classify_server::Classify for ClassifyServiceImpl {
         request: tonic::Request<generated::ClassifyRequest>,
     ) -> Result<tonic::Response<generated::ClassifyResponse>, tonic::Status> {
         let req = request.into_inner();
+        // AC-014: record request telemetry with the context/session hashed, so
+        // default telemetry and trace capture never carry raw prompt/session text.
+        // Recorded before the request fields are moved into the pipeline input.
+        self.telemetry.record_request(RequestEvent {
+            request_id: req.request_id.clone(),
+            session_id: req.session_id.clone(),
+            context: req.context.clone(),
+        });
         // Build the typed input; session/signals are passthrough metadata, the
         // context is what gets classified. Never a route in the response (AC-010).
         let input = crate::classify::ClassificationInput {
@@ -116,8 +128,10 @@ impl ClassifyServer {
         let bound = listener.local_addr()?;
 
         let metrics = Metrics::new();
+        let telemetry = Telemetry::new();
         let service = generated::classify_server::ClassifyServer::new(ClassifyServiceImpl::new(
             crate::classify::ClassifyService::from_synthetic_fixtures_with_metrics(metrics.clone()),
+            telemetry.clone(),
         ));
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
         let serve = tonic::transport::Server::builder()
@@ -130,6 +144,7 @@ impl ClassifyServer {
             _runtime: runtime,
             addr: bound,
             metrics,
+            telemetry,
         })
     }
 
@@ -145,6 +160,14 @@ impl ClassifyServer {
     /// recorded by every classification the server has served (AC-012).
     pub fn metrics_snapshot(&self) -> MetricsSnapshot {
         self.metrics.snapshot()
+    }
+
+    /// A copy of the captured trace events recorded by served classifications.
+    ///
+    /// Each [`TraceEvent`] carries the request id and context/session hashes but
+    /// never the raw prompt or session text (AC-014).
+    pub fn trace_capture(&self) -> Vec<TraceEvent> {
+        self.telemetry.trace_capture()
     }
 }
 

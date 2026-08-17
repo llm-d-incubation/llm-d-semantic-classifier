@@ -15,4 +15,5 @@ pub mod metrics;
 pub mod queue;
 pub mod ranker;
 pub mod runtime;
+pub mod telemetry;
 pub mod tokenizer;
