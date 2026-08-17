@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::cache::{CacheKey, SharedCache};
+use crate::metrics::{LatencyStage, Metrics};
 use crate::ranker::{cosine_rank, Prototype};
 use crate::tokenizer::Tokenizer;
 
@@ -211,16 +212,27 @@ pub struct ClassifyService {
     cache: SharedCache,
     tokenizer: Arc<Tokenizer>,
     prototypes: Arc<Vec<Prototype>>,
+    metrics: Metrics,
 }
 
 impl ClassifyService {
     /// Build a pipeline from an already-loaded resident [`Tokenizer`] and the
     /// prototype set to rank against.
     pub fn new(tokenizer: Tokenizer, prototypes: Vec<Prototype>) -> Self {
+        Self::with_metrics(tokenizer, prototypes, Metrics::new())
+    }
+
+    /// Build a pipeline that records latency decomposition into `metrics`.
+    pub fn with_metrics(
+        tokenizer: Tokenizer,
+        prototypes: Vec<Prototype>,
+        metrics: Metrics,
+    ) -> Self {
         Self {
             cache: SharedCache::new(),
             tokenizer: Arc::new(tokenizer),
             prototypes: Arc::new(prototypes),
+            metrics,
         }
     }
 
@@ -228,6 +240,19 @@ impl ClassifyService {
     /// (`tests/fixtures/modelcar/tokenizer.json` + `synthetic-prototypes.json`).
     /// Offline only — no model download required for I-001.
     pub fn from_synthetic_fixtures() -> Self {
+        let (tokenizer, prototypes) = Self::synthetic_fixtures();
+        Self::new(tokenizer, prototypes)
+    }
+
+    /// Build the deterministic pipeline from the synthetic fixtures, recording
+    /// latency decomposition into `metrics`.
+    pub fn from_synthetic_fixtures_with_metrics(metrics: Metrics) -> Self {
+        let (tokenizer, prototypes) = Self::synthetic_fixtures();
+        Self::with_metrics(tokenizer, prototypes, metrics)
+    }
+
+    /// Load the committed synthetic tokenizer + prototype fixtures (offline).
+    fn synthetic_fixtures() -> (Tokenizer, Vec<Prototype>) {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
             .join("fixtures")
@@ -235,7 +260,7 @@ impl ClassifyService {
         let tokenizer = Tokenizer::load(root.join("tokenizer.json"))
             .expect("synthetic tokenizer fixture must load");
         let prototypes = load_prototypes(root.join("synthetic-prototypes.json"));
-        Self::new(tokenizer, prototypes)
+        (tokenizer, prototypes)
     }
 
     /// Deterministic tokenize + rank: tokenize with the resident tokenizer,
@@ -243,11 +268,21 @@ impl ClassifyService {
     /// against the synthetic prototypes. No model forward. A tokenization
     /// failure is an explicit [`ClassifyError::Tokenizer`] — never a fabricated
     /// label (spec failure contract).
-    fn deterministic_classify(&self, context: &str) -> Result<ClassificationResult, ClassifyError> {
+    fn deterministic_classify(
+        &self,
+        context: &str,
+        metrics: &Metrics,
+    ) -> Result<ClassificationResult, ClassifyError> {
+        // Tokenize stage (AC-012): independently measured.
+        let tokenize_start = std::time::Instant::now();
         let ids = self
             .tokenizer
             .tokenize(context)
             .map_err(|e| ClassifyError::Tokenizer(e.to_string()))?;
+        metrics.record_stage(LatencyStage::Tokenize, tokenize_start.elapsed());
+        // Forward stage (AC-012): the deterministic embed + rank, independently
+        // measured from the tokenize boundary.
+        let forward_start = std::time::Instant::now();
         let mut embedding = vec![0.0f32; SYNTHETIC_DIM];
         for id in ids {
             embedding[(id as usize) % SYNTHETIC_DIM] += 1.0;
@@ -256,6 +291,7 @@ impl ClassifyService {
             .into_iter()
             .map(|(id, score)| RankedSignal { id, score })
             .collect();
+        metrics.record_stage(LatencyStage::Forward, forward_start.elapsed());
         Ok(ClassificationResult {
             classifier_id: CLASSIFIER_ID.to_string(),
             model_revision: MODEL_REVISION.to_string(),
@@ -276,6 +312,8 @@ impl ClassifierRuntime for ClassifyService {
     /// cache stores the typed [`ClassificationResult`] keyed by the blake3
     /// versioned fingerprint.
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
+        // Total service latency is measured from admission to response (AC-012).
+        let total_start = std::time::Instant::now();
         let normalized = input.text.trim().to_string();
         let key = CacheKey::new(
             CLASSIFIER_ID,
@@ -284,12 +322,34 @@ impl ClassifierRuntime for ClassifyService {
             TAXONOMY_REVISION,
             &normalized,
         );
+        let metrics = self.metrics.clone();
+        // A miss runs the forward closure (tokenize + rank) on the designated
+        // single-flight caller; a hit bypasses it entirely (AC-006). The flag
+        // distinguishes the two so the hit/miss counters partition every request.
+        let forward_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let forward = {
             let service = self.clone();
             let normalized = normalized.clone();
-            move || service.deterministic_classify(&normalized)
+            let metrics = metrics.clone();
+            let forward_ran = forward_ran.clone();
+            move || {
+                forward_ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                // Queue wait ends when the forward (dequeued work) begins.
+                metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
+                service.deterministic_classify(&normalized, &metrics)
+            }
         };
-        self.cache.classify_concurrent(key, forward)
+        let result = self.cache.classify_concurrent(key, forward);
+        // Classify the request as a cache hit or miss and expose the counters.
+        if forward_ran.load(std::sync::atomic::Ordering::SeqCst) {
+            metrics.record_cache_miss();
+        } else {
+            metrics.record_cache_hit();
+            // A hit's queue wait ends when the cached result is served.
+            metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
+        }
+        metrics.record_stage(LatencyStage::Total, total_start.elapsed());
+        result
     }
 }
 

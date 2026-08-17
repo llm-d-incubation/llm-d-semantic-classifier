@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::io;
 
 use crate::classify::ClassifierRuntime;
+use crate::metrics::{Metrics, MetricsSnapshot};
 
 /// Generated protobuf messages and tonic service/client code (from
 /// `proto/classify.proto`, produced by `build.rs`).
@@ -45,6 +46,7 @@ pub struct ClassifyServer {
     /// lifetime; never read directly (hence the underscore prefix).
     _runtime: tokio::runtime::Runtime,
     addr: std::net::SocketAddr,
+    metrics: Metrics,
 }
 
 /// The pipeline-backed tonic classify service.
@@ -113,8 +115,9 @@ impl ClassifyServer {
             .map_err(io::Error::other)?;
         let bound = listener.local_addr()?;
 
+        let metrics = Metrics::new();
         let service = generated::classify_server::ClassifyServer::new(ClassifyServiceImpl::new(
-            crate::classify::ClassifyService::from_synthetic_fixtures(),
+            crate::classify::ClassifyService::from_synthetic_fixtures_with_metrics(metrics.clone()),
         ));
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
         let serve = tonic::transport::Server::builder()
@@ -126,12 +129,22 @@ impl ClassifyServer {
         Ok(ClassifyServer {
             _runtime: runtime,
             addr: bound,
+            metrics,
         })
     }
 
     /// The actual bound address (resolved after an ephemeral `:0` bind).
     pub fn local_addr(&self) -> String {
         self.addr.to_string()
+    }
+
+    /// A snapshot of the server's latency-decomposition and cache counters.
+    ///
+    /// The returned [`MetricsSnapshot`] exposes the accumulated
+    /// queue/tokenize/forward/total latency and the cache hit/miss counters
+    /// recorded by every classification the server has served (AC-012).
+    pub fn metrics_snapshot(&self) -> MetricsSnapshot {
+        self.metrics.snapshot()
     }
 }
 
