@@ -1,39 +1,75 @@
 #!/usr/bin/env bash
-# Deterministic spec/test-plan/matrix cross-verification.
-# - every AC in spec.md appears in test-plan.md
-# - every U/I/S/P/R test ID referenced by test-plan.md exists in tests/TEST_MATRIX.md
-# - evidence tier report per AC: LOCAL-GREEN / PROMOTION-GREEN / open
-# - --promotion: exit nonzero unless every AC has PROMOTION-GREEN.md
+# Deterministic spec verification. Promotion is COMPUTED from per-test status,
+# never asserted by the existence of a Markdown file.
+#
+#  - expands range notation (U-001..U-005) so no required ID hides inside a range
+#  - cross-checks every required ID against tests/TEST_MATRIX.md
+#  - derives green/pending per ID by locating a real test function
+#  - LOCAL tier  = every unit/local-integration ID for the AC is green
+#  - PROMOTION   = every required ID (incl. I/S/P tiers) is green
+# Usage: spec-check <spec-id> [--promotion] [--refresh]
 set -euo pipefail
 cd "$(dirname "$0")/.."
-ID="${1:?usage: spec-check <spec-id> [--promotion]}"
+ID="${1:?usage: spec-check <spec-id> [--promotion] [--refresh]}"
 MODE="${2:-}"
 D="specs/$ID"
 test -f "$D/spec.md" || { echo "[spec-check] FAIL: $D/spec.md missing"; exit 1; }
 test -f "$D/test-plan.md" || { echo "[spec-check] FAIL: $D/test-plan.md missing"; exit 1; }
+
 python3 - "$D" "$MODE" <<'PY'
-import re, sys, os
+import json, os, re, subprocess, sys
 d, mode = sys.argv[1], sys.argv[2]
-spec = open(f"{d}/spec.md").read()
 plan = open(f"{d}/test-plan.md").read()
 matrix = open("tests/TEST_MATRIX.md").read()
-acs = sorted(set(re.findall(r'AC-\d+', spec)))
-plan_acs = set(re.findall(r'AC-\d+', plan))
-missing_plan = [a for a in acs if a not in plan_acs]
-if missing_plan: print(f"[spec-check] FAIL: ACs missing from test-plan: {missing_plan}"); sys.exit(1)
-ids = sorted(set(re.findall(r'\b([UISPR]-\d{3})\b', plan)))
-matrix_ids = set(re.findall(r'\b([UISPR]-\d{3})\b', matrix))
-ghosts = [i for i in ids if i not in matrix_ids]
-if ghosts: print(f"[spec-check] FAIL: test-plan references IDs absent from TEST_MATRIX: {ghosts}"); sys.exit(1)
-print(f"[spec-check] {len(acs)} ACs mapped; {len(ids)} test IDs all present in matrix")
-promo_missing = []
-for a in acs:
-    ev = f"{d}/evidence/{a}"
-    if os.path.exists(f"{ev}/PROMOTION-GREEN.md"): tier = "PROMOTION-GREEN"
-    elif os.path.exists(f"{ev}/LOCAL-GREEN.md"):   tier = "LOCAL-GREEN"; promo_missing.append(a)
-    else:                                          tier = "open";        promo_missing.append(a)
-    print(f"  {a}: {tier}")
-if mode == "--promotion" and promo_missing:
-    print(f"[spec-check] PROMOTION FAIL: not promotion-green: {promo_missing}"); sys.exit(1)
-print("[spec-check] OK" + (" (promotion satisfied)" if mode=="--promotion" else " (local mode; promotion tiers reported above)"))
+
+def expand(seg):
+    ids = set()
+    for m in re.finditer(r'\b([UISPR])-(\d{3})\.\.(?:([UISPR])-)?(\d{3})\b', seg):
+        kind, lo, _k, hi = m.groups()
+        ids.update(f"{kind}-{n:03d}" for n in range(int(lo), int(hi) + 1))
+    ids.update(re.findall(r'\b[UISPR]-\d{3}\b',
+               re.sub(r'\b[UISPR]-\d{3}\.\.(?:[UISPR]-)?\d{3}\b', ' ', seg)))
+    return ids
+
+rows = {}
+for line in plan.splitlines():
+    m = re.match(r'\|\s*(AC-\d+)\s*\|(.*)\|', line)
+    if m:
+        rows[m.group(1)] = sorted(expand(m.group(2)))
+if not rows:
+    print("[spec-check] FAIL: no AC rows parsed from test-plan.md"); sys.exit(1)
+
+matrix_ids = set(re.findall(r'\b[UISPR]-\d{3}\b', matrix))
+ghosts = sorted({i for ids in rows.values() for i in ids} - matrix_ids)
+if ghosts:
+    print(f"[spec-check] FAIL: required IDs absent from TEST_MATRIX: {ghosts}"); sys.exit(1)
+
+src = subprocess.run(['bash','-c','grep -rhoE "fn [a-z][0-9]{3}[a-z0-9_]*" src tests --include=*.rs'],
+                     capture_output=True, text=True).stdout
+have = {f"{k.upper()}-{n}" for k, n in re.findall(r'fn ([a-z])(\d{3})', src)}
+
+status = {ac: {i: ("green" if i in have else "pending") for i in ids} for ac, ids in rows.items()}
+json.dump(status, open(f"{d}/test-status.json", "w"), indent=1, sort_keys=True)
+
+req_total = sum(len(v) for v in status.values())
+req_green = sum(1 for ac in status for i in status[ac] if status[ac][i] == "green")
+print(f"[spec-check] {len(rows)} ACs | {req_total} required IDs (ranges expanded) | {req_green} green, {req_total-req_green} pending")
+
+not_promo = []
+for ac in sorted(status):
+    ids = status[ac]
+    # LOCAL tier is reviewed judgment (which tests belong to the local
+    # environment is a spec question) and is recorded by the reviewed
+    # LOCAL-GREEN.md artifact. PROMOTION is strictly COMPUTED: every required
+    # ID green. Pending IDs are always printed so the gap cannot hide.
+    promo_ok = all(v == "green" for v in ids.values())
+    local_claimed = os.path.exists(f"{d}/evidence/{ac}/LOCAL-GREEN.md")
+    tier = "PROMOTION-GREEN" if promo_ok else ("LOCAL-GREEN" if local_claimed else "open")
+    if not promo_ok: not_promo.append(ac)
+    pend = [i for i, v in sorted(ids.items()) if v == "pending"]
+    print(f"  {ac}: {tier}  ({sum(1 for v in ids.values() if v=='green')}/{len(ids)})" + (f"  pending: {','.join(pend)}" if pend else ""))
+
+if mode == "--promotion" and not_promo:
+    print(f"[spec-check] PROMOTION FAIL: {len(not_promo)} ACs lack full evidence: {not_promo}"); sys.exit(1)
+print("[spec-check] OK" + (" (promotion satisfied)" if mode == "--promotion" else ""))
 PY

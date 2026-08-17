@@ -1,0 +1,98 @@
+{
+ "AC-001": {
+  "U-001": "green",
+  "U-002": "green",
+  "U-003": "green",
+  "U-004": "green",
+  "U-005": "green"
+ },
+ "AC-002": {
+  "I-010": "pending",
+  "I-011": "pending",
+  "S-006": "pending",
+  "U-020": "green",
+  "U-022": "green"
+ },
+ "AC-003": {
+  "I-060": "pending",
+  "I-061": "pending",
+  "I-062": "pending",
+  "I-063": "pending",
+  "I-064": "green",
+  "S-010": "pending",
+  "S-051": "pending",
+  "S-053": "pending"
+ },
+ "AC-004": {
+  "I-020": "pending",
+  "I-021": "pending",
+  "I-022": "pending",
+  "I-023": "pending",
+  "I-024": "pending",
+  "I-025": "pending",
+  "U-060": "green",
+  "U-061": "green",
+  "U-062": "green",
+  "U-063": "green",
+  "U-064": "green",
+  "U-065": "green",
+  "U-066": "green",
+  "U-067": "green"
+ },
+ "AC-005": {
+  "I-012": "pending",
+  "U-021": "green"
+ },
+ "AC-006": {
+  "I-030": "pending",
+  "P-001": "pending",
+  "P-002": "pending",
+  "U-040": "green"
+ },
+ "AC-007": {
+  "I-031": "pending",
+  "P-004": "pending",
+  "U-041": "green"
+ },
+ "AC-008": {
+  "I-035": "pending",
+  "P-023": "pending",
+  "U-030": "green",
+  "U-031": "green"
+ },
+ "AC-009": {
+  "I-001": "green",
+  "I-002": "green",
+  "I-005": "green",
+  "I-006": "green",
+  "I-008": "pending",
+  "S-001": "pending",
+  "S-002": "pending"
+ },
+ "AC-010": {
+  "I-007": "green",
+  "U-010": "green"
+ },
+ "AC-011": {
+  "P-030": "pending",
+  "P-031": "pending",
+  "P-032": "pending",
+  "P-033": "pending",
+  "S-001": "pending",
+  "S-002": "pending"
+ },
+ "AC-012": {
+  "I-080": "green",
+  "S-080": "pending",
+  "U-080": "green",
+  "U-081": "green"
+ },
+ "AC-013": {
+  "I-045": "green",
+  "S-020": "pending"
+ },
+ "AC-014": {
+  "I-085": "green",
+  "U-085": "green"
+ }
+}

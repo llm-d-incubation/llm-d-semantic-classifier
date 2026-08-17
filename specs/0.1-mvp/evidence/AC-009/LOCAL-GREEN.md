@@ -64,3 +64,11 @@ tests, run explicitly after `./hack/fetch-model`); grpc suite 4/4.
   ?? src/dummy_praxis.rs
   ```
 - No commits/pushes.
+
+## SUPERSEDED FACTS (reviewer, 2026-08-17)
+This summary states that dummy Praxis propagates a **deadline**. It does not: `deadline` is
+absent from `ClassifyRequest` in the protobuf and `DummyPraxis::classify_and_route()` drops
+it. Deadline propagation is I-003, a **0.20** hardening test — the code is correct for 0.1;
+this evidence text was wrong. Also note the served path uses the deterministic synthetic
+pipeline, not `CandleClassifier`; wiring the real runtime is tracked as the integration
+convergence work.

@@ -78,3 +78,11 @@ would have served stale cached classifications.
 I-030 (warmed result cache hit invokes zero model forwards) and P-001/P-002
 (perf cache hit) are integration/perf-environment tests per the test plan and
 out of scope for this local unit turn. They remain open for their environments.
+
+## SUPERSEDED FACTS (reviewer, 2026-08-17)
+This summary describes the cache key as a std `DefaultHasher`/u64 fingerprint. That is NO
+LONGER TRUE: the corrective batch (commit 8306356) replaced it with a 32-byte **BLAKE3**
+fingerprint over classifier/model/tokenizer/taxonomy revisions plus the normalized-text hash,
+and the cache stores a typed `ClassificationResult` rather than a String. See
+`HARDENING-blake3.md`. DefaultHasher was rejected because it is not stable across rustc
+versions and 64-bit collisions are a correctness hazard for served classifications.
