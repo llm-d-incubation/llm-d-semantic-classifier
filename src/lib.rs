@@ -4,6 +4,7 @@
 //! Networking, the gRPC API, the `ClassifierRuntime` abstraction, and the
 //! Candle backend arrive in later acceptance criteria.
 
+pub mod bench;
 pub mod cache;
 pub mod classify;
 pub mod config;

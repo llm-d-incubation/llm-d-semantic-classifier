@@ -9,6 +9,10 @@ description = "llm-d-sc semantic classification runtime"
 name = "llm_d_sc"
 path = "src/lib.rs"
 
+[[bin]]
+name = "llm-d-sc-server"
+path = "src/bin/server.rs"
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
