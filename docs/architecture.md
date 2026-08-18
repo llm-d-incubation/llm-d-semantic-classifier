@@ -4,7 +4,7 @@
 llm-d-sc: Rust semantic-classifier runtime. Signals: domain, complexity, sensitivity —
 ranked, calibrated, with confidence and abstention. Classifies; never routes (Praxis owns
 routing: policy, sessions, stickiness, fallback, capacity). Stack: tokio + tonic/axum,
-Candle first backend (pluggable). The 0.1 fixture is a BERT-based SentenceTransformers embedding model (Transformer -> Pooling -> Normalize per its modules.json), NOT ModernBERT, moka cache, bounded inference workers,
+Candle first backend (pluggable). The 0.1 fixture is a BERT-based SentenceTransformers embedding model (Transformer -> Pooling -> Normalize per its modules.json), NOT ModernBERT, a custom SharedCache (BLAKE3-keyed, single-flight); moka remains a candidate but is NOT what is implemented, bounded inference workers,
 resident model/tokenizer, warmup before readiness, sub-20ms uncached budget, p99 discipline.
 Reference research: the maintainer's research corpus (pipeline-agentic-research.md,
 rust-service-research.md, "llm-d-sc Classifier Runtime Service").

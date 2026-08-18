@@ -1,9 +1,9 @@
 # llm-d-sc OpenShift service container: multi-stage build, no model baked in.
 #
 # The real model is NOT in this image; it arrives via a ModelCar mount at /models
-# (LLM_D_SC_MODEL_DIR). The served pipeline is the deterministic synthetic one,
-# which needs only the committed synthetic fixtures (tokenizer + prototypes) —
-# those are NOT a model.
+# (LLM_D_SC_MODEL_DIR). The served pipeline loads and warms that real model.
+# KNOWN GAP: the classifier DEFINITION (prototypes/taxonomy) is still read from
+# committed fixtures rather than the artifact — see README integration gap 3.
 
 FROM rust:1-slim AS builder
 RUN apt-get update \

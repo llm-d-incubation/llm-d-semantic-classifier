@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Execution evidence: runs the suites and records PASS/FAIL per test ID.
+# spec-check consumes this instead of scanning for function names — a function
+# that exists is not a test that passed.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+OUT="artifacts/test-results.json"
+mkdir -p artifacts
+SHA=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+LOG=$(mktemp)
+{ cargo test --locked 2>&1; echo "---PARITY---"; ./hack/test-parity 2>&1; } | tee "$LOG" >/dev/null
+python3 - "$LOG" "$OUT" "$SHA" "$TS" <<'PY'
+import json, re, sys
+log, out, sha, ts = sys.argv[1:5]
+res = {}
+for line in open(log, errors='ignore'):
+    m = re.match(r'test ([a-z0-9_:]*?([a-z])(\d{3})[a-z0-9_]*) \.\.\. (ok|FAILED|ignored)', line.strip())
+    if m:
+        tid = f"{m.group(2).upper()}-{m.group(3)}"
+        status = {"ok": "green", "FAILED": "red", "ignored": "ignored"}[m.group(4)]
+        prev = res.get(tid, {}).get("status")
+        if prev != "red":
+            res[tid] = {"status": status, "test_fn": m.group(1), "sha": sha, "timestamp": ts,
+                        "command": "cargo test --locked / hack/test-parity"}
+json.dump(res, open(out, "w"), indent=1, sort_keys=True)
+g = sum(1 for v in res.values() if v["status"] == "green")
+r = sum(1 for v in res.values() if v["status"] == "red")
+print(f"[test-report] {len(res)} test IDs executed: {g} green, {r} red -> {out}")
+PY

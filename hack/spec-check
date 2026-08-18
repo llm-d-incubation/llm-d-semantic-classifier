@@ -44,9 +44,18 @@ ghosts = sorted({i for ids in rows.values() for i in ids} - matrix_ids)
 if ghosts:
     print(f"[spec-check] FAIL: required IDs absent from TEST_MATRIX: {ghosts}"); sys.exit(1)
 
-src = subprocess.run(['bash','-c','grep -rhoE "fn [a-z][0-9]{3}[a-z0-9_]*" src tests --include=*.rs'],
-                     capture_output=True, text=True).stdout
-have = {f"{k.upper()}-{n}" for k, n in re.findall(r'fn ([a-z])(\d{3})', src)}
+# EXECUTION evidence, not source presence: a test function that exists is not
+# a test that passed. hack/test-report writes artifacts/test-results.json from
+# real suite runs; spec-check refuses to infer green from grep.
+results_path = "artifacts/test-results.json"
+if os.path.exists(results_path):
+    results = json.load(open(results_path))
+    have = {k for k, v in results.items() if v.get("status") == "green"}
+    src_evidence = f"execution evidence ({len(results)} IDs executed)"
+else:
+    have = set()
+    src_evidence = "NO EXECUTION EVIDENCE — run ./hack/test-report (all IDs treated as pending)"
+print(f"[spec-check] evidence source: {src_evidence}")
 
 status = {ac: {i: ("green" if i in have else "pending") for i in ids} for ac, ids in rows.items()}
 json.dump(status, open(f"{d}/test-status.json", "w"), indent=1, sort_keys=True)
@@ -64,12 +73,28 @@ for ac in sorted(status):
     # ID green. Pending IDs are always printed so the gap cannot hide.
     promo_ok = all(v == "green" for v in ids.values())
     local_claimed = os.path.exists(f"{d}/evidence/{ac}/LOCAL-GREEN.md")
-    tier = "PROMOTION-GREEN" if promo_ok else ("LOCAL-GREEN" if local_claimed else "open")
+    # Per-AC we can only speak about TEST evidence. Version promotion also
+    # requires non-test gates (GitHub CI, independent review PASS, exact-SHA
+    # homelab validation, maintainer approval) tracked in acceptance.md.
+    tier = "TEST-EVIDENCE-GREEN" if promo_ok else ("LOCAL-GREEN" if local_claimed else "open")
     if not promo_ok: not_promo.append(ac)
     pend = [i for i, v in sorted(ids.items()) if v == "pending"]
     print(f"  {ac}: {tier}  ({sum(1 for v in ids.values() if v=='green')}/{len(ids)})" + (f"  pending: {','.join(pend)}" if pend else ""))
 
-if mode == "--promotion" and not_promo:
-    print(f"[spec-check] PROMOTION FAIL: {len(not_promo)} ACs lack full evidence: {not_promo}"); sys.exit(1)
+if mode == "--promotion":
+    fail = False
+    if not_promo:
+        print(f"[spec-check] PROMOTION FAIL: {len(not_promo)} ACs lack full test evidence: {not_promo}"); fail = True
+    # non-test gates: every acceptance.md checkbox must be ticked
+    acc = f"{d}/acceptance.md"
+    if os.path.exists(acc):
+        unchecked = [l.strip() for l in open(acc) if l.strip().startswith("- [ ]")]
+        if unchecked:
+            print(f"[spec-check] PROMOTION FAIL: {len(unchecked)} non-test gates unmet in acceptance.md (CI / review / homelab / maintainer):")
+            for u in unchecked[:6]: print(f"    {u}")
+            fail = True
+    else:
+        print(f"[spec-check] PROMOTION FAIL: {acc} missing (non-test gates unverifiable)"); fail = True
+    if fail: sys.exit(1)
 print("[spec-check] OK" + (" (promotion satisfied)" if mode == "--promotion" else ""))
 PY
