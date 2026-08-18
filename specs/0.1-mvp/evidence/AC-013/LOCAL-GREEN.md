@@ -8,7 +8,7 @@ equivalent result to the pre-restart one, not abstain and not a stale hit.
 
 ## Tests mapped in test-plan.md
 `specs/0.1-mvp/test-plan.md` maps AC-013 to I-045 (integration) and S-020
-(OpenShift system). No unit-level (U-*) tests are mapped to this criterion.
+(Kubernetes system). No unit-level (U-*) tests are mapped to this criterion.
 I-045 passes locally, so the whole-criterion LOCAL-GREEN.md for the local
 (worker) scope is written here. PROMOTION-GREEN.md is reserved for when the
 integration/system/perf tiers (S-020) also pass and is never written by the
@@ -51,9 +51,9 @@ non-vacuously GREEN immediately. The smallest change is the proving test
   GREEN-I045.md)
 
 ## Deferred to their phase
-- S-020 (OpenShift kill/restart then full-context recompute) — system tier, not
+- S-020 (Kubernetes kill/restart then full-context recompute) — system tier, not
   run by the worker; required for PROMOTION-GREEN only. Consistent with how
-  AC-009/AC-011/AC-012 defer the OpenShift E2E.
+  AC-009/AC-011/AC-012 defer the Kubernetes E2E.
 
 ## Worktree / SHA
 - HEAD SHA: `752d5671d55f01f5bd90d957779fc84d7a1e0721`

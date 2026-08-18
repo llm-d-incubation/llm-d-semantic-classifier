@@ -10,7 +10,7 @@ pub mod bench;
 pub mod cache;
 pub mod classify;
 pub mod config;
-pub mod dummy_praxis;
+pub mod dummy_gateway;
 pub mod embedding;
 pub mod grpc;
 pub mod handoff;

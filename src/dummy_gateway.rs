@@ -1,9 +1,9 @@
-//! Dummy Praxis: consumes a classification response over persistent gRPC and
+//! Dummy Gateway: consumes a classification response over persistent gRPC and
 //! routes OUTSIDE llm-d-sc.
 //!
 //! AC-009 (I-005/I-006) proves the responsibility split: llm-d-sc returns ranked
 //! semantic signals and NEVER a final route; routing/session authority stays with
-//! Praxis (AC-010). This module is the dummy client that
+//! the AI Gateway (AC-010). This module is the dummy client that
 //! 1. receives a synthetic [`DummyRequest`] with session metadata
 //!    (request_id/session_id/context/requested-signals/deadline),
 //! 2. propagates that metadata to llm-d-sc over the PERSISTENT channel,
@@ -31,7 +31,7 @@ const ROUTE_LOCAL_MODEL: &str = "local-model";
 /// Route chosen for every other consumed signal.
 const ROUTE_GENERAL_MODEL: &str = "general-model";
 
-/// A synthetic request the dummy Praxis receives.
+/// A synthetic request the dummy gateway receives.
 ///
 /// The session metadata is propagated verbatim to llm-d-sc and kept intact for
 /// the dummy's own (outside llm-d-sc) routing decision.
@@ -44,7 +44,7 @@ pub struct DummyRequest {
     pub deadline: Option<std::time::SystemTime>,
 }
 
-/// The outcome of a dummy Praxis classify-and-route turn.
+/// The outcome of a dummy gateway classify-and-route turn.
 ///
 /// Carries the preserved session ids, the consumed ranked semantic signal, the
 /// route the dummy chose itself (outside llm-d-sc), and the measured classifier
@@ -58,19 +58,19 @@ pub struct DummyOutcome {
     pub rtt: std::time::Duration,
 }
 
-/// Dummy Praxis client over the persistent classify channel.
+/// Dummy Gateway client over the persistent classify channel.
 ///
 /// Connects once and reuses the single persistent channel (I-008: no reconnect
 /// per call), consuming the ranked signal and routing outside llm-d-sc.
-pub struct DummyPraxis {
+pub struct DummyGateway {
     client: ClassifyClient,
 }
 
-impl DummyPraxis {
+impl DummyGateway {
     /// Connect to the classify server at `addr` over a persistent channel.
-    pub fn connect(addr: impl AsRef<str>) -> io::Result<DummyPraxis> {
+    pub fn connect(addr: impl AsRef<str>) -> io::Result<DummyGateway> {
         let client = ClassifyClient::connect(addr)?;
-        Ok(DummyPraxis { client })
+        Ok(DummyGateway { client })
     }
 
     /// Propagate the request's session metadata to llm-d-sc, consume the ranked
@@ -96,7 +96,7 @@ impl DummyPraxis {
             .map(|s| s.label.clone())
             .unwrap_or_default();
 
-        // Routing authority stays Praxis: apply the dummy's fixed test-only
+        // Routing authority stays the AI Gateway: apply the dummy's fixed test-only
         // mapping, never a route dictated by llm-d-sc.
         let route = if signal == NEVER_EGRESS_SIGNAL {
             ROUTE_LOCAL_MODEL

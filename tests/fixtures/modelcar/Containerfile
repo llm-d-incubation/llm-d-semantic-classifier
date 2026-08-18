@@ -1,4 +1,4 @@
-# Red Hat/OpenShift-style ModelCar test fixture.
+# ModelCar-style OCI model artifact test fixture.
 # Release automation should pin base images by digest.
 ARG HF_MODEL=cnuland/semantic-routing-sensitivity
 ARG HF_REVISION=43f21d21ac48134464f8510a9ac9c95bdac7ba86

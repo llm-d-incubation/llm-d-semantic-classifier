@@ -1,7 +1,7 @@
 //! AC-011 benchmark runner: executes the HOMELAB.md benchmark protocol against
 //! the REAL classifier and emits machine-readable results.
 //!
-//! The maintainer runs this binary directly (and later on OpenShift unchanged).
+//! The maintainer runs this binary directly (and later on Kubernetes unchanged).
 //! It:
 //!
 //! 1. Builds a REAL [`CandleClassifier`] from `LLM_D_SC_MODEL_DIR` (default

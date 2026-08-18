@@ -1,19 +1,19 @@
 //! Benchmark-harness mechanics tests (AC-011 prerequisite instrumentation).
 //!
 //! These tests prove the RTT-DISTRIBUTION CAPTURE HARNESS itself — the
-//! instrument that will later measure the OpenShift topology. They are NOT the
+//! instrument that will later measure the Kubernetes topology. They are NOT the
 //! AC-011 criterion tests.
 //!
 //! STATUS: P-030..P-033 and S-001/S-002 are **PENDING cluster measurement**.
 //!
 //! `specs/0.1-mvp/test-plan.md` maps AC-011 to P-030..P-033 (perf) and
-//! S-001/S-002 (OpenShift system). P-030/P-031 require a dummy Praxis -> same-Pod
+//! S-001/S-002 (Kubernetes system). P-030/P-031 require a dummy gateway -> same-Pod
 //! sidecar (client and server on the same loopback address, as in a shared Pod)
 //! RTT DISTRIBUTION; P-032/P-033 require the ClusterIP (distinct-address service)
-//! RTT DISTRIBUTION; S-001/S-002 require a real OpenShift cluster E2E. A local
+//! RTT DISTRIBUTION; S-001/S-002 require a real Kubernetes cluster E2E. A local
 //! loopback-vs-distinct-address simulation on a laptop CANNOT discharge those
 //! cluster-tier measurements, so P-030..P-033 and S-001/S-002 remain PENDING
-//! until they are measured on the cluster. The OpenShift cluster E2E (S-001/S-002)
+//! until they are measured on the cluster. The Kubernetes cluster E2E (S-001/S-002)
 //! is the deployment phase, consistent with how AC-009 deferred S-001/S-002.
 //!
 //! # Methodology (CONVERGENCE SLICE 4)
@@ -35,8 +35,8 @@
 //!   producing invalid numbers.
 //!
 //! Concurrency (P-020 concurrency 1 / P-021 concurrency 4) is measured with
-//! per-worker dummy-Praxis clients over the persistent channel — the
-//! `Mutex<DummyPraxis>` serial loop cannot overlap requests — and the SAME
+//! per-worker dummy-the AI Gateway clients over the persistent channel — the
+//! `Mutex<DummyGateway>` serial loop cannot overlap requests — and the SAME
 //! distributions and methodology self-check apply.
 
 use llm_d_sc::bench::{BenchmarkRun, CacheMode, Topology};

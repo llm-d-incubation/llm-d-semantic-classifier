@@ -35,8 +35,8 @@ distribution was therefore invalid before any cluster measurement ran.
 ### 3. Concurrency measurement
 - `BenchmarkRun::measure_concurrent(n, concurrency)` distributes `n` requests
   across `concurrency` worker threads, each with its OWN per-worker
-  `DummyPraxis` client over the persistent channel (P-020 concurrency 1 /
-  P-021 concurrency 4). The `Mutex<DummyPraxis>` serial loop cannot overlap
+  `DummyGateway` client over the persistent channel (P-020 concurrency 1 /
+  P-021 concurrency 4). The `Mutex<DummyGateway>` serial loop cannot overlap
   requests, so it is replaced with per-worker clients. It records the SAME
   percentile distribution and applies the SAME methodology self-check.
 

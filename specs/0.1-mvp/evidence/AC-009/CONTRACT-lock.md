@@ -53,12 +53,12 @@ explicit `tonic::Status::invalid_argument` naming the unsupported signal. Never
 silently ignored. (RED-first: `RED-U011.md` / `GREEN-U011.md`, recorded under
 AC-009.)
 
-## Existing gRPC/dummy-Praxis tests strengthened (never weakened)
+## Existing gRPC/dummy-the AI Gateway tests strengthened (never weakened)
 - `tests/grpc.rs` i001 (real round trip): now asserts non-empty `ranked`, every
   signal has a non-empty label and a finite score, all revision fingerprint
   fields are non-empty, and `status == OK`. i002 (persistent channel) similarly
   asserts labels + finite scores per turn.
-- `src/dummy_praxis.rs` consumes the top ranked signal via `ranked[0].label`.
+- `src/dummy_gateway.rs` consumes the top ranked signal via `ranked[0].label`.
 - `tests/restart.rs` I-045 and `tests/metrics.rs` I-080: updated to the `ranked`
   field and added `status == OK` assertions.
 - `tests/schema.rs` U-010: updated to parse the richer `ClassifyResponse` block —
@@ -70,7 +70,7 @@ AC-009.)
 ```
 cargo test --locked --test grpc        # 6 passed; 0 failed
 cargo test --locked --test schema      # 2 passed; 0 failed
-./hack/test-impact ...                 # FULL SUITE (src/dummy_praxis.rs unknown surface)
+./hack/test-impact ...                 # FULL SUITE (src/dummy_gateway.rs unknown surface)
 ./hack/spec-check 0.1-mvp              # OK; AC-009 5/8 (U-011 now green)
 ./hack/verify                          # EXIT 0 (fmt, clippy -D warnings, build, full suite)
 ```

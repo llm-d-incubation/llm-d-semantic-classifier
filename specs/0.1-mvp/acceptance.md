@@ -6,7 +6,7 @@
 - [ ] Golden reference parity passes.
 - [ ] Cache hit invokes zero model forwards.
 - [ ] Queue remains bounded under overload.
-- [ ] Dummy Praxis persistent-gRPC E2E passes.
+- [ ] Dummy Gateway persistent-gRPC E2E passes.
 - [ ] Response does not contain final route.
 - [ ] Sidecar and ClusterIP p50/p95/p99 evidence attached.
 - [ ] Queue/tokenize/forward/total metrics present.

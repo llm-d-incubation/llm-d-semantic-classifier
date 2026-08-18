@@ -7,19 +7,19 @@ S-001/S-002) are **PENDING cluster measurement** and are NOT discharged by this
 evidence.
 
 ## Criterion
-AC-011 requires OpenShift sidecar (same-Pod) and ClusterIP RTT DISTRIBUTIONS to
+AC-011 requires Kubernetes sidecar (same-Pod) and ClusterIP RTT DISTRIBUTIONS to
 be captured, cache-hit and cache-miss. Per AGENTS.md hard rules, latency
 evidence must be percentile distributions (p50/p90/p95/p99/max), never
 average-only.
 
 ## Why the criterion's tests remain PENDING
 `specs/0.1-mvp/test-plan.md` maps AC-011 to P-030..P-033 (perf) and S-001/S-002
-(OpenShift system):
-- P-030/P-031: dummy Praxis -> same-Pod sidecar RTT distribution (hit/miss)
-- P-032/P-033: dummy Praxis -> ClusterIP RTT distribution (hit/miss)
-- S-001/S-002: OpenShift cluster E2E
+(Kubernetes system):
+- P-030/P-031: dummy gateway -> same-Pod sidecar RTT distribution (hit/miss)
+- P-032/P-033: dummy gateway -> ClusterIP RTT distribution (hit/miss)
+- S-001/S-002: Kubernetes cluster E2E
 
-P-030..P-033 are CLUSTER measurements (same-Pod / ClusterIP RTT on OpenShift). A
+P-030..P-033 are CLUSTER measurements (same-Pod / ClusterIP RTT on Kubernetes). A
 loopback-vs-distinct-address simulation on a laptop cannot discharge them;
 claiming otherwise would make the perf tier unfalsifiable. So P-030..P-033 and
 S-001/S-002 remain PENDING until measured on the cluster (deployment phase,
@@ -42,7 +42,7 @@ not exist):
 - `src/bench.rs` (new): `BenchmarkRun` / `Topology` (Sidecar/ClusterIp) /
   `CacheMode` (Hit/Miss) / `RttDistribution` (p50/p90/p95/p99/max via
   nearest-rank percentile over sorted per-request RTT samples). Drives the
-  dummy Praxis over the persistent gRPC channel (I-008), never a route (AC-010).
+  dummy gateway over the persistent gRPC channel (I-008), never a route (AC-010).
   `CacheMode::Hit` reuses one fixed context (exact-result cache hit);
   `CacheMode::Miss` sends a unique context per request (cache miss).
 - `src/lib.rs`: added `pub mod bench;`.

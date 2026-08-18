@@ -31,7 +31,7 @@ Run:
 - push/pull through ephemeral/local OCI registry;
 - verify `/models` layout and non-root readability;
 - run llm-d-sc against materialized artifact;
-- dummy Praxis gRPC E2E;
+- dummy gateway gRPC E2E;
 - golden embedding/classification parity;
 - cache-hit/cache-miss functional tests;
 - overload/deadline integration tests;

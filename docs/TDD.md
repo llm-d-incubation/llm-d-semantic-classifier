@@ -71,7 +71,7 @@ Required evidence:
 
 No performance PR may simultaneously change implementation, workload, and benchmark methodology without making the comparison explicit.
 
-## Integration TDD: dummy Praxis first
+## Integration TDD: dummy gateway first
 
 The dummy service must accept a synthetic inference request, preserve session metadata, call llm-d-sc over the intended gRPC contract, consume semantic signals, apply a trivial test-only route outside llm-d-sc, and record callout RTT.
 
@@ -87,4 +87,4 @@ A flaky functional test is a defect. Retries do not substitute for root cause. P
 
 ## Mocks
 
-Use mocks for internal trait invariants where valuable. Integration/system tests should prefer real protobuf, gRPC, scheduler, cache, tokenizer/model fixture, container images, and OpenShift networking.
+Use mocks for internal trait invariants where valuable. Integration/system tests should prefer real protobuf, gRPC, scheduler, cache, tokenizer/model fixture, container images, and Kubernetes networking.

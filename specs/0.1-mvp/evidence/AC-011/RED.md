@@ -1,7 +1,7 @@
-# AC-011 RED evidence — OpenShift sidecar/ClusterIP RTT distributions captured
+# AC-011 RED evidence — Kubernetes sidecar/ClusterIP RTT distributions captured
 
 ## Criterion
-AC-011 requires OpenShift sidecar (same-Pod) and ClusterIP RTT DISTRIBUTIONS to
+AC-011 requires Kubernetes sidecar (same-Pod) and ClusterIP RTT DISTRIBUTIONS to
 be captured — cache-hit and cache-miss. Per AGENTS.md hard rules, latency
 evidence must be percentile distributions (p50/p90/p95/p99/max), never
 average-only.
@@ -20,16 +20,16 @@ workload, and asserts a real percentile distribution (p50 <= p90 <= p95 <=
 p99 <= max, strictly positive p50) — a mean-only measurement cannot satisfy it.
 
 `specs/0.1-mvp/test-plan.md` maps AC-011 to P-030..P-033 (perf) and S-001/S-002
-(OpenShift system). This slice selects the local deterministic mechanics proving
-tests P-030..P-033; the OpenShift cluster E2E (S-001/S-002) is the deployment
+(Kubernetes system). This slice selects the local deterministic mechanics proving
+tests P-030..P-033; the Kubernetes cluster E2E (S-001/S-002) is the deployment
 phase and is deferred, consistent with how AC-009 deferred S-001/S-002.
 
 ## RED state (RTT distribution capture does not exist)
 There is no RTT distribution capture anywhere in the crate. The only RTT
 measurement is a single `Duration` on `DummyOutcome.rtt`
-(`src/dummy_praxis.rs:58,90`) — no percentile distribution, no benchmark
+(`src/dummy_gateway.rs:58,90`) — no percentile distribution, no benchmark
 harness, and no `bench` module (`src/lib.rs` registers only cache/classify/
-config/dummy_praxis/embedding/grpc/queue/ranker/runtime/tokenizer). The proving
+config/dummy_gateway/embedding/grpc/queue/ranker/runtime/tokenizer). The proving
 tests reference `llm_d_sc::bench`, which is undefined, so they cannot compile.
 
 ## Command
@@ -62,7 +62,7 @@ error: could not compile `llm-d-sc` (test "bench_rtt") due to 2 previous errors
 Exit code: 101.
 
 ## Why this is the expected failure
-AC-011 demands that OpenShift sidecar and ClusterIP RTT distributions be
+AC-011 demands that Kubernetes sidecar and ClusterIP RTT distributions be
 captured. No such capture exists: the crate only records a single scalar RTT
 (`DummyOutcome.rtt`) and has no benchmark harness computing percentile
 distributions. Because `llm_d_sc::bench` is undefined, `cargo test --locked

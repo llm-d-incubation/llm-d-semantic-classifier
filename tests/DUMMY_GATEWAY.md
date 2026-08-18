@@ -1,6 +1,6 @@
-# Dummy Praxis Integration Contract
+# Dummy Gateway Integration Contract
 
-The dummy service is deliberately simple; it tests the integration seam without reimplementing Praxis.
+The dummy service is deliberately simple; it tests the integration seam without reimplementing the AI Gateway.
 
 ## Responsibilities
 - receive a synthetic incoming request;
@@ -22,7 +22,7 @@ The dummy service is deliberately simple; it tests the integration seam without 
 
 ```text
 fixture request
- -> dummy Praxis
+ -> dummy gateway
  -> llm-d-sc classify
  <- ranked sensitivity signal
  -> dummy test policy

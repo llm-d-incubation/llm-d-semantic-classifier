@@ -1,7 +1,7 @@
 //! Benchmark harness: captures per-request RTT DISTRIBUTIONS for the dummy
-//! Praxis -> llm-d-sc path, never average-only latency.
+//! the AI Gateway -> llm-d-sc path, never average-only latency.
 //!
-//! AC-011 requires OpenShift sidecar (same-Pod) and ClusterIP RTT distributions
+//! AC-011 requires Kubernetes sidecar (same-Pod) and ClusterIP RTT distributions
 //! to be captured, for cache-hit and cache-miss workloads. AGENTS.md hard rules
 //! forbid average-only latency claims and require p50/p95/p99 percentile
 //! evidence. This harness therefore measures a workload of per-request RTTs over
@@ -13,7 +13,7 @@
 //! consistent with prior slices. [`Topology`] labels the network path (sidecar =
 //! same-address loopback; ClusterIP = distinct-address service) and [`CacheMode`]
 //! selects a cache-hit (warmed exact-result cache) or cache-miss (unique context
-//! per request) workload. Routing/session authority stays with the dummy Praxis
+//! per request) workload. Routing/session authority stays with the dummy gateway
 //! (AC-010); this module only measures RTT, never a route.
 //!
 //! # Methodology (this slice)
@@ -45,7 +45,7 @@ use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use crate::dummy_praxis::{DummyPraxis, DummyRequest};
+use crate::dummy_gateway::{DummyGateway, DummyRequest};
 use crate::metrics::{Metrics, MetricsSnapshot};
 
 /// Unique-per-run counter so two benchmark runs never share measured keys.
@@ -53,13 +53,13 @@ static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(0);
 
 /// The network topology under test. Both connect over the persistent gRPC
 /// channel to the supplied address; the variant is recorded so the captured
-/// distribution is attributable to the intended OpenShift path (sidecar =
+/// distribution is attributable to the intended Kubernetes path (sidecar =
 /// same-Pod loopback; ClusterIP = distinct-address service).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Topology {
-    /// same-Pod: dummy Praxis and llm-d-sc on the same loopback address.
+    /// same-Pod: dummy gateway and llm-d-sc on the same loopback address.
     Sidecar,
-    /// ClusterIP: dummy Praxis reaches llm-d-sc via a distinct-address service.
+    /// ClusterIP: dummy gateway reaches llm-d-sc via a distinct-address service.
     ClusterIp,
 }
 
@@ -225,16 +225,16 @@ fn verify_window(
 
 /// A benchmark run over the persistent gRPC channel for a topology/cache-mode.
 ///
-/// Connects the dummy Praxis once (persistent channel, I-008: no reconnect per
+/// Connects the dummy gateway once (persistent channel, I-008: no reconnect per
 /// call), warms the requested cache mode, then measures a workload of
 /// per-request RTTs and reduces them to a percentile distribution. When a
 /// [`Metrics`] handle is supplied it also PROVES its own methodology (see the
-/// module docs). Serial measurement uses the shared [`Mutex`]`<DummyPraxis>`;
+/// module docs). Serial measurement uses the shared [`Mutex`]`<DummyGateway>`;
 /// [`BenchmarkRun::measure_concurrent`] uses one per-worker client per worker
 /// thread over the persistent channel.
 pub struct BenchmarkRun {
     addr: String,
-    praxis: Mutex<DummyPraxis>,
+    gateway: Mutex<DummyGateway>,
     cache_mode: CacheMode,
     run_id: u64,
     metrics: Option<Metrics>,
@@ -246,7 +246,7 @@ pub struct BenchmarkRun {
 }
 
 impl BenchmarkRun {
-    /// Connect the dummy Praxis to `addr` and configure a topology/cache-mode.
+    /// Connect the dummy gateway to `addr` and configure a topology/cache-mode.
     ///
     /// No methodology self-check is performed (no shared [`Metrics`] handle).
     /// Prefer [`BenchmarkRun::with_metrics`] when a server's counters are
@@ -277,10 +277,10 @@ impl BenchmarkRun {
         metrics: Option<Metrics>,
     ) -> io::Result<Self> {
         let addr = addr.as_ref().to_string();
-        let praxis = DummyPraxis::connect(&addr)?;
+        let gateway = DummyGateway::connect(&addr)?;
         Ok(BenchmarkRun {
             addr,
-            praxis: Mutex::new(praxis),
+            gateway: Mutex::new(gateway),
             cache_mode,
             run_id: NEXT_RUN_ID.fetch_add(1, Ordering::SeqCst),
             metrics,
@@ -321,7 +321,7 @@ impl BenchmarkRun {
     }
 
     /// Send one classify-and-route turn with an explicit context and return its
-    /// measured RTT, over the shared serial dummy-Praxis client.
+    /// measured RTT, over the shared serial dummy-the AI Gateway client.
     fn send_one(&self, context: &str, index: u64) -> Result<std::time::Duration, tonic::Status> {
         let req = DummyRequest {
             request_id: format!("bench-{index}"),
@@ -330,7 +330,7 @@ impl BenchmarkRun {
             signals: vec!["sensitivity".to_string()],
             deadline: None,
         };
-        let outcome = self.praxis.lock().unwrap().classify_and_route(req)?;
+        let outcome = self.gateway.lock().unwrap().classify_and_route(req)?;
         Ok(outcome.rtt)
     }
 
@@ -369,10 +369,10 @@ impl BenchmarkRun {
     }
 
     /// Measure `n` requests under `concurrency` concurrent workers, each with its
-    /// OWN dummy-Praxis client over the persistent channel, and reduce their RTTs
+    /// OWN dummy-the AI Gateway client over the persistent channel, and reduce their RTTs
     /// to the same percentile distribution.
     ///
-    /// The `Mutex<DummyPraxis>` serial loop cannot overlap requests, so this uses
+    /// The `Mutex<DummyGateway>` serial loop cannot overlap requests, so this uses
     /// one per-worker client per worker thread (P-020 concurrency 1 / P-021
     /// concurrency 4). Keys are the per-run `measure-{run_id}-{i}` namespace,
     /// exactly as [`BenchmarkRun::measure`], and the same methodology self-check
@@ -404,7 +404,7 @@ impl BenchmarkRun {
     }
 
     /// Distribute `n` requests across `concurrency` worker threads, each with a
-    /// fresh per-worker dummy-Praxis client over the persistent channel, and
+    /// fresh per-worker dummy-the AI Gateway client over the persistent channel, and
     /// collect every measured RTT.
     fn run_concurrent(
         &self,
@@ -426,7 +426,7 @@ impl BenchmarkRun {
             let seed = seed.clone();
             handles.push(std::thread::spawn(move || -> Result<Vec<_>, BenchError> {
                 // Per-worker client over the persistent channel (I-008).
-                let mut praxis = DummyPraxis::connect(addr).map_err(BenchError::Io)?;
+                let mut gateway = DummyGateway::connect(addr).map_err(BenchError::Io)?;
                 let mut samples = Vec::with_capacity(count as usize);
                 for i in start..end {
                     let context = seeded_measure_context(&seed, run_id, i);
@@ -437,7 +437,7 @@ impl BenchmarkRun {
                         signals: vec!["sensitivity".to_string()],
                         deadline: None,
                     };
-                    let outcome = praxis
+                    let outcome = gateway
                         .classify_and_route(req)
                         .map_err(BenchError::Request)?;
                     samples.push(outcome.rtt);
@@ -461,7 +461,7 @@ impl BenchmarkRun {
 pub enum BenchError {
     /// A classify request failed over the gRPC channel.
     Request(tonic::Status),
-    /// A per-worker dummy-Praxis client could not connect.
+    /// A per-worker dummy-the AI Gateway client could not connect.
     Io(std::io::Error),
     /// A concurrent worker thread panicked.
     Thread,

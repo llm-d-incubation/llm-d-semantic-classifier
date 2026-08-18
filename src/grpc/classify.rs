@@ -1,13 +1,13 @@
 //! Blocking classification server and client over a persistent gRPC channel.
 //!
-//! AC-009 requires the dummy Praxis client to consume the classification
+//! AC-009 requires the dummy gateway client to consume the classification
 //! response over a PERSISTENT gRPC channel. This slice (I-001/I-002) pins the
 //! round-trip contract: a real tonic client/server exchange a request and a
 //! response carrying ranked semantic signals, and multi-turn requests reuse one
 //! HTTP/2 channel without reconnecting per call (I-008).
 //!
 //! The generated protobuf/tonic items live in [`generated`]. This module wraps
-//! them in blocking APIs so tests and the dummy Praxis can call classify without
+//! them in blocking APIs so tests and the dummy gateway can call classify without
 //! touching an async runtime directly. A private Tokio runtime owns the network
 //! I/O; the client holds exactly one [`tonic::transport::Channel`] and reuses it
 //! for every turn (no reconnect per call).
@@ -76,7 +76,7 @@ pub struct ClassifyServer {
 /// exceeds the configured bound.
 pub struct ClassifyServiceImpl<R> {
     telemetry: Telemetry,
-    executor: Arc<InferenceExecutor<R>>,
+    executor: Arc<InferenceExecutor<crate::classify::ServiceCore<R>>>,
 }
 
 impl<R> Clone for ClassifyServiceImpl<R> {
@@ -94,9 +94,11 @@ impl<R> ClassifyServiceImpl<R>
 where
     R: crate::classify::ClassifierRuntime + Send + Sync + 'static,
 {
-    /// Build a classify service backed by the given runtime and telemetry
+    /// Build a classify service backed by the given raw backend and telemetry
     /// recorder (AC-014), with a dedicated inference executor and the default
-    /// queue bound.
+    /// queue bound. The raw backend is wrapped in the generic [`ServiceCore`],
+    /// so EVERY backend (synthetic or Candle) inherits the exact-result cache,
+    /// single-flight coalescing, metrics, and error behaviour.
     pub fn new(service: R, telemetry: Telemetry) -> Self {
         Self::with_executor(service, telemetry, Metrics::new(), DEFAULT_QUEUE_BOUND)
     }
@@ -105,10 +107,15 @@ where
     /// queue wait into `metrics` and bounds total admitted (in-flight + queued)
     /// work to `bound`.
     ///
-    /// The caller supplies the [`Metrics`] handle so the executor's queue-wait
-    /// recording is the SAME registry the server snapshots (AC-008/AC-012).
+    /// The raw backend `service` is wrapped in the shared [`ServiceCore`], which
+    /// owns the exact-result cache and the hit/miss/total/queue metrics. The
+    /// caller supplies the [`Metrics`] handle so the core's cache counters and
+    /// the executor's queue-wait recording are the SAME registry the server
+    /// snapshots (AC-008/AC-012). The raw backend must share that registry for
+    /// its tokenize/forward stage recording.
     pub fn with_executor(service: R, telemetry: Telemetry, metrics: Metrics, bound: usize) -> Self {
-        let executor = InferenceExecutor::spawn(service, metrics, bound);
+        let core = crate::classify::ServiceCore::with_metrics(service, metrics.clone());
+        let executor = InferenceExecutor::spawn(core, metrics, bound);
         Self {
             telemetry,
             executor: Arc::new(executor),

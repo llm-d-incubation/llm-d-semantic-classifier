@@ -1,7 +1,7 @@
 # AC-009 GREEN evidence — I-001 (real tonic round trip)
 
 ## Criterion
-AC-009 dummy Praxis consumes response over persistent gRPC.
+AC-009 dummy gateway consumes response over persistent gRPC.
 
 ## Proving test (this slice)
 - I-001 `i001_real_tonic_round_trip` (`tests/grpc.rs`, integration, async `#[tokio::test]`).

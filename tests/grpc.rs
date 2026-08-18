@@ -1,4 +1,4 @@
-//! AC-009 proving tests (integration): dummy Praxis consumes a response over
+//! AC-009 proving tests (integration): dummy gateway consumes a response over
 //! persistent gRPC.
 //!
 //! This slice selects I-001 (real tonic client/server round trip) and keeps the
@@ -9,13 +9,13 @@
 //! (tokenizer -> versioned cache -> single-flight -> ranker over the committed
 //! synthetic prototypes) — no Candle model is required for I-001.
 //!
-//! This slice selects I-005/I-006 (dummy-Praxis semantics): the dummy Praxis
+//! This slice selects I-005/I-006 (dummy-the AI Gateway semantics): the dummy gateway
 //! preserves the session metadata it propagates and consumes the ranked signal
 //! then routes OUTSIDE llm-d-sc via its fixed test-only mapping (routing
-//! authority stays Praxis). I-008 (multi-turn requests do not reconnect per
+//! authority stays the AI Gateway). I-008 (multi-turn requests do not reconnect per
 //! call) is asserted by I-002 (`channel_reconnect_count == 0`).
 //!
-//! The proving tests drive a [`llm_d_sc::dummy_praxis::DummyPraxis`] client
+//! The proving tests drive a [`llm_d_sc::dummy_gateway::DummyGateway`] client
 //! against the real classify server over the persistent channel. The dummy
 //! module is intentionally NOT implemented yet, so these tests cannot compile
 //! until it exists — that is the expected RED for this slice.
@@ -35,7 +35,7 @@ fn fixture_request(request_id: &str, session_id: &str) -> ClassifyRequest {
 
 /// I-001: a real tonic client/server round trip returns ranked signals.
 ///
-/// AC-009 requires the dummy Praxis (client) to consume the classification
+/// AC-009 requires the dummy gateway (client) to consume the classification
 /// response over real gRPC. This test starts a REAL tonic classify server on an
 /// ephemeral localhost port, connects a REAL client channel, sends one classify
 /// request for a fixture input, and asserts a ranked-signals response arrives
@@ -127,7 +127,7 @@ async fn i001_real_tonic_round_trip() {
 
 /// I-002: the HTTP/2 channel is persistent and reused across calls.
 ///
-/// AC-009 requires a PERSISTENT gRPC channel. The dummy Praxis makes several
+/// AC-009 requires a PERSISTENT gRPC channel. The dummy gateway makes several
 /// calls over the same channel and must NOT open a new connection per call
 /// (I-008: multi-turn requests do not reconnect per call). This test drives
 /// several turn requests and asserts the client reused the persistent channel
@@ -202,23 +202,23 @@ fn u011_unknown_signal_explicit_error() {
     );
 }
 
-/// I-005: the dummy Praxis preserves session metadata.
+/// I-005: the dummy gateway preserves session metadata.
 ///
-/// AC-009 requires the dummy Praxis to receive a synthetic request, propagate
+/// AC-009 requires the dummy gateway to receive a synthetic request, propagate
 /// request_id/session_id/context/requested-signals/deadline to llm-d-sc over the
 /// PERSISTENT channel, consume the ranked signal, and keep that session metadata
 /// intact for its own (outside llm-d-sc) routing decision. This test drives a
-/// real DummyPraxis client against the real classify server and asserts the
+/// real DummyGateway client against the real classify server and asserts the
 /// request/session ids the dummy propagated are preserved verbatim and it
 /// recorded a route of its own — never one dictated by llm-d-sc.
 #[test]
-fn i005_dummy_praxis_preserves_session_metadata() {
-    use llm_d_sc::dummy_praxis::{DummyPraxis, DummyRequest};
+fn i005_dummy_gateway_preserves_session_metadata() {
+    use llm_d_sc::dummy_gateway::{DummyGateway, DummyRequest};
     use llm_d_sc::grpc::classify::ClassifyServer;
 
     let server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
     let addr = server.local_addr();
-    let mut praxis = DummyPraxis::connect(&addr).expect("dummy praxis must connect");
+    let mut gateway = DummyGateway::connect(&addr).expect("dummy gateway must connect");
 
     let req = DummyRequest {
         request_id: "req-0005".to_string(),
@@ -227,12 +227,12 @@ fn i005_dummy_praxis_preserves_session_metadata() {
         signals: vec!["sensitivity".to_string()],
         deadline: None,
     };
-    let outcome = praxis
+    let outcome = gateway
         .classify_and_route(req.clone())
-        .expect("dummy praxis must classify and route");
+        .expect("dummy gateway must classify and route");
 
     // The dummy preserved the session metadata it propagated: its recorded ids
-    // match what it sent (routing/session authority stays Praxis, AC-010).
+    // match what it sent (routing/session authority stays the AI Gateway, AC-010).
     assert_eq!(
         outcome.request_id, req.request_id,
         "request_id must be preserved"
@@ -244,24 +244,24 @@ fn i005_dummy_praxis_preserves_session_metadata() {
     // The dummy recorded a route of its own (outside llm-d-sc).
     assert!(
         !outcome.route.is_empty(),
-        "dummy praxis must record its own route outside llm-d-sc"
+        "dummy gateway must record its own route outside llm-d-sc"
     );
 }
 
-/// I-006: the dummy Praxis consumes the signal, then routes OUTSIDE llm-d-sc.
+/// I-006: the dummy gateway consumes the signal, then routes OUTSIDE llm-d-sc.
 ///
 /// The classify response must carry ranked signals but NEVER a final route; the
 /// dummy applies its fixed test-only mapping (NEVER_EGRESS -> local-model,
 /// otherwise -> general-model) and records the resulting route + classifier RTT.
 /// This asserts routing authority stays outside llm-d-sc (AC-009/AC-010).
 #[test]
-fn i006_dummy_praxis_routes_outside_llm_d_sc() {
-    use llm_d_sc::dummy_praxis::{DummyPraxis, DummyRequest};
+fn i006_dummy_gateway_routes_outside_llm_d_sc() {
+    use llm_d_sc::dummy_gateway::{DummyGateway, DummyRequest};
     use llm_d_sc::grpc::classify::ClassifyServer;
 
     let server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
     let addr = server.local_addr();
-    let mut praxis = DummyPraxis::connect(&addr).expect("dummy praxis must connect");
+    let mut gateway = DummyGateway::connect(&addr).expect("dummy gateway must connect");
 
     let req = DummyRequest {
         request_id: "req-0006".to_string(),
@@ -270,14 +270,14 @@ fn i006_dummy_praxis_routes_outside_llm_d_sc() {
         signals: vec!["sensitivity".to_string()],
         deadline: None,
     };
-    let outcome = praxis
+    let outcome = gateway
         .classify_and_route(req)
-        .expect("dummy praxis must classify and route");
+        .expect("dummy gateway must classify and route");
 
     // The dummy CONSUMED a ranked semantic signal from llm-d-sc...
     assert!(
         !outcome.signal.is_empty(),
-        "dummy praxis must consume a ranked semantic signal"
+        "dummy gateway must consume a ranked semantic signal"
     );
     // ...then routed OUTSIDE llm-d-sc via its fixed test-only mapping.
     assert!(
@@ -287,23 +287,23 @@ fn i006_dummy_praxis_routes_outside_llm_d_sc() {
     // It measured a monotonic start/end around the classifier RPC.
     assert!(
         outcome.rtt > std::time::Duration::ZERO,
-        "dummy praxis must measure classifier RTT"
+        "dummy gateway must measure classifier RTT"
     );
 }
 
 /// I-007: the llm-d-sc response cannot dictate an endpoint.
 ///
 /// AC-010 requires the response to carry signals, not a final route. The dummy
-/// Praxis receives a response, and the ONLY route in the system is the one the
+/// the AI Gateway receives a response, and the ONLY route in the system is the one the
 /// dummy computes itself (outside llm-d-sc). The response type offers no route
 /// to consume: `ClassifyResponse` has no `route`/`endpoint`/`final_route` field
 /// (ADR-0001, U-010), so referencing one would not compile. This test drives a
-/// real DummyPraxis against the real server and asserts the recorded route is
+/// real DummyGateway against the real server and asserts the recorded route is
 /// exactly the dummy's own fixed test-only mapping, never anything derived from
 /// the response.
 #[test]
 fn i007_response_cannot_dictate_endpoint() {
-    use llm_d_sc::dummy_praxis::{DummyPraxis, DummyRequest};
+    use llm_d_sc::dummy_gateway::{DummyGateway, DummyRequest};
     use llm_d_sc::grpc::classify::ClassifyServer;
 
     // The response type offers no route field to consume (ADR-0001): the schema
@@ -319,7 +319,7 @@ fn i007_response_cannot_dictate_endpoint() {
 
     let server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
     let addr = server.local_addr();
-    let mut praxis = DummyPraxis::connect(&addr).expect("dummy praxis must connect");
+    let mut gateway = DummyGateway::connect(&addr).expect("dummy gateway must connect");
 
     let req = DummyRequest {
         request_id: "req-0007".to_string(),
@@ -328,9 +328,9 @@ fn i007_response_cannot_dictate_endpoint() {
         signals: vec!["sensitivity".to_string()],
         deadline: None,
     };
-    let outcome = praxis
+    let outcome = gateway
         .classify_and_route(req)
-        .expect("dummy praxis must classify and route");
+        .expect("dummy gateway must classify and route");
 
     // The ONLY route in the system is the one the dummy computes itself: it is
     // exactly one of the dummy's own fixed test-only mappings, and it was

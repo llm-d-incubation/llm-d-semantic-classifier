@@ -1,9 +1,9 @@
 # AC-011 RED — benchmark runner binary does not exist
 
 ## Criterion / slice
-AC-011 (OpenShift sidecar/ClusterIP RTT distributions captured) benchmark
+AC-011 (Kubernetes sidecar/ClusterIP RTT distributions captured) benchmark
 MEASUREMENT INFRASTRUCTURE: a `src/bin/bench-runner.rs` binary the maintainer
-executes (also unchanged on OpenShift) that runs the HOMELAB.md 0.1 protocol
+executes (also unchanged on Kubernetes) that runs the HOMELAB.md 0.1 protocol
 against the REAL classifier and emits machine-readable results.
 
 ## Proving test (this slice)

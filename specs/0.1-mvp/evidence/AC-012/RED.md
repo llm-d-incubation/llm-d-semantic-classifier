@@ -23,15 +23,15 @@ cache hit over the persistent channel, and reads `server.metrics_snapshot()`
 to assert the latency decomposition and counters are visible.
 
 `specs/0.1-mvp/test-plan.md` maps AC-012 to U-080/U-081 (unit), I-080
-(integration), and S-080 (OpenShift system). This slice selects the local
-deterministic mechanics proving tests U-080/U-081/I-080; the OpenShift cluster
+(integration), and S-080 (Kubernetes system). This slice selects the local
+deterministic mechanics proving tests U-080/U-081/I-080; the Kubernetes cluster
 E2E (S-080) is the deployment phase and is deferred, consistent with how
 AC-009/AC-011 deferred the cluster E2E.
 
 ## RED state (latency decomposition does not exist)
 There is no metrics/latency-decomposition infrastructure anywhere in the crate:
 - no `metrics` module (`src/lib.rs` registers only bench/cache/classify/config/
-  dummy_praxis/embedding/grpc/queue/ranker/runtime/tokenizer);
+  dummy_gateway/embedding/grpc/queue/ranker/runtime/tokenizer);
 - no metrics dependency in `Cargo.toml` (only serde/serde_json/toml/candle/
   tonic/prost/tokio/blake3/tokenizers);
 - the pipeline in `src/classify.rs` measures nothing; `BoundedQueue` in

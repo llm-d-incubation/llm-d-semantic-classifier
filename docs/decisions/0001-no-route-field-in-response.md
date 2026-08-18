@@ -22,12 +22,12 @@ Rationale:
 1. U-010 is about the SCHEMA, not runtime behavior. A response type that *can*
    express a route fails the criterion as written.
 2. "Must never set" makes a safety property depend on implementer discipline
-   forever. Praxis owns routing (spec: State/Non-goals); the wire contract
+   forever. the AI Gateway owns routing (spec: State/Non-goals); the wire contract
    should make the alternative unrepresentable, not merely discouraged.
 3. `src/classify.rs`'s `ClassificationResult` already has no route field — the
    proto was inconsistent with the typed core it serializes.
 4. It is a latent hazard: any future handler could populate it, and any future
-   Praxis could start reading it, silently migrating routing authority.
+   the AI Gateway could start reading it, silently migrating routing authority.
 
 ## Reviewer accountability
 

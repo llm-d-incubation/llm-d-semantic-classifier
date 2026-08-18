@@ -10,7 +10,7 @@ integration/system-tier tests I-080 and S-080, which remain for their tiers.
 ## Criterion
 AC-012 requires the queue, tokenize, forward, and total service latency to be
 independently visible. `specs/0.1-mvp/test-plan.md` maps AC-012 to U-080/U-081
-(unit), I-080 (integration), and S-080 (OpenShift system).
+(unit), I-080 (integration), and S-080 (Kubernetes system).
 
 ## Why I-080 / S-080 remain for their tiers
 - I-080 (latency decomposition metrics visible over a real gRPC round trip) is
@@ -18,8 +18,8 @@ independently visible. `specs/0.1-mvp/test-plan.md` maps AC-012 to U-080/U-081
   currently passes locally, but it is not discharged by this unit-tier LOCAL-GREEN
   evidence; it is recorded for the integration tier.
 - S-080 (system evidence that queue/tokenize/forward/total are distinguished
-  independently on OpenShift) is the SYSTEM/cluster E2E and is deferred to the
-  deployment phase, consistent with how AC-009/AC-011 deferred the OpenShift
+  independently on Kubernetes) is the SYSTEM/cluster E2E and is deferred to the
+  deployment phase, consistent with how AC-009/AC-011 deferred the Kubernetes
   cluster E2E (S-001/S-002).
 
 ## What this evidence proves (local mechanics) — all GREEN
@@ -76,5 +76,5 @@ suite). `./hack/spec-check 0.1-mvp` OK. `./hack/test-impact` reported FULL SUITE
   `specs/0.1-mvp/evidence/AC-012/` untracked. No commits/pushes.
 
 ## Next
-I-080 (integration) and S-080 (OpenShift cluster E2E) remain for their tiers.
+I-080 (integration) and S-080 (Kubernetes cluster E2E) remain for their tiers.
 Do not start AC-013.

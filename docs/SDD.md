@@ -83,9 +83,9 @@ Example:
 
 | Acceptance criterion | Tests | Environment |
 |---|---|---|
-| readiness follows load/warmup | U-020, I-010, S-006 | unit/integration/OpenShift |
+| readiness follows load/warmup | U-020, I-010, S-006 | unit/integration/Kubernetes |
 | overload rejects instead of unbounded queue | U-031, I-035, P-023 | unit/integration/homelab |
-| cache loss cannot silently downgrade | U-048, I-046, S-022 | unit/dummy Praxis/OpenShift |
+| cache loss cannot silently downgrade | U-048, I-046, S-022 | unit/dummy gateway/Kubernetes |
 
 ### acceptance.md
 
@@ -104,9 +104,9 @@ AC-005 warmup gates readiness
 AC-006 classify returns ranked signal
 AC-007 cache hit bypasses inference
 AC-008 bounded queue rejects overload
-AC-009 dummy Praxis consumes response
+AC-009 dummy gateway consumes response
 AC-010 ModelCar is self-contained
-AC-011 OpenShift sidecar RTT evidence exists
+AC-011 Kubernetes sidecar RTT evidence exists
 ```
 
 ## Spec drift

@@ -1,4 +1,4 @@
-# OpenShift Homelab System and Performance Validation
+# Kubernetes Homelab System and Performance Validation
 
 The homelab is the prod-like evidence environment. GitHub is the clean-room reproducibility environment. Do not expose a trusted homelab as a general self-hosted runner for untrusted public PR code.
 
@@ -7,7 +7,7 @@ The homelab is the prod-like evidence environment. GitHub is the clean-room repr
 For every promotion run record:
 - exact reviewed git SHA;
 - llm-d-sc image digest;
-- dummy Praxis image digest;
+- dummy gateway image digest;
 - model OCI image digest;
 - classifier revision;
 - cluster version;
@@ -20,7 +20,7 @@ For every promotion run record:
 ```text
 Pod
 +------------------------------------------------+
-| dummy-praxis                                   |
+| dummy-gateway                                   |
 |   persistent gRPC -> 127.0.0.1:50051          |
 |                                                |
 | llm-d-sc                                       |
@@ -28,7 +28,7 @@ Pod
 +------------------------------------------------+
 ```
 
-Measure from the dummy Praxis process:
+Measure from the dummy gateway process:
 - no-op RPC transport floor (test service/build only if implemented);
 - exact-result cache hit;
 - cache miss/real inference;
@@ -43,7 +43,7 @@ This directly answers the sidecar network-hop question.
 ## Topology B — ClusterIP
 
 ```text
-dummy Praxis Pod
+dummy gateway Pod
       |
       | persistent HTTP/2 gRPC
       v
@@ -84,7 +84,7 @@ Initial method:
 4. run measured workload (start with 10,000 requests for stable percentiles);
 5. repeat at least 3 independent trials;
 6. store p50/p90/p95/p99/max, throughput, errors/drops;
-7. separately store queue/tokenize/forward/total service time and dummy-Praxis RTT;
+7. separately store queue/tokenize/forward/total service time and dummy-the AI Gateway RTT;
 8. retain raw histogram output.
 
 ## 0.1 matrix
@@ -106,12 +106,12 @@ Concurrency: 1 and 4 for MVP. 0.21 expands to 2/8/16/32 and CPU/GPU/thread matri
 - evidence shows cold cache/recompute rather than hidden persistence.
 
 ### Cache loss with weak delta — 0.22
-- dummy Praxis stores a test session already using a high-capability route;
+- dummy gateway stores a test session already using a high-capability route;
 - llm-d-sc had optional session feature state;
 - restart llm-d-sc;
 - send only `continue`/weak delta without enough context;
 - classifier returns `abstain`/`insufficient_context`;
-- dummy Praxis preserves conservative route;
+- dummy gateway preserves conservative route;
 - once context is re-established, normal classification resumes.
 
 ### Saturation
@@ -141,7 +141,7 @@ Concurrency: 1 and 4 for MVP. 0.21 expands to 2/8/16/32 and CPU/GPU/thread matri
 6. verify model materializes and service becomes ready.
 7. prove request path performs no external model download.
 
-## OpenShift security/runtime tests
+## Kubernetes security/runtime tests
 
 - random non-root UID works;
 - model files are readable without root and mounted read-only to llm-d-sc;

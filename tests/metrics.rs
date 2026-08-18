@@ -3,7 +3,7 @@
 //! This slice selects the local deterministic metrics proving tests for AC-012:
 //! U-080 (queue/tokenize/forward/total metrics emitted), U-081 (cache hit/miss
 //! counters correct), and I-080 (latency decomposition metrics visible over a
-//! real gRPC round trip). S-080 (OpenShift system evidence distinguishing
+//! real gRPC round trip). S-080 (Kubernetes system evidence distinguishing
 //! RTT/queue/forward) is the deployment phase and is deferred, consistent with
 //! how AC-009/AC-011 deferred the cluster E2E.
 //!

@@ -4,7 +4,7 @@
 //! capture) to never contain raw prompt or session text. Per
 //! `specs/0.1-mvp/test-plan.md`, AC-014 maps to U-085 (raw prompt absent from
 //! default logs/metrics) and I-085 (trace capture has IDs/hashes but no raw
-//! prompt). No OpenShift system test is mapped to AC-014, so this slice covers
+//! prompt). No Kubernetes system test is mapped to AC-014, so this slice covers
 //! the local deterministic mechanics only.
 //!
 //! The service currently has NO telemetry/logging/trace surface: `src/lib.rs`

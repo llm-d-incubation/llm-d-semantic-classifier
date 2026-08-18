@@ -15,9 +15,9 @@ podman build --format=oci \
 
 Then push and resolve the immutable OCI digest for promotion/system tests.
 
-## Red Hat/OpenShift pattern
+## Kubernetes pattern
 
-The final image uses UBI Micro, places model data under `/models`, owns copied files as root/root, and makes them readable/executable as appropriate for OpenShift random-user execution. The serving binary remains in a separate image.
+The final image uses UBI Micro, places model data under `/models`, owns copied files as root/root, and makes them readable/executable as appropriate for Kubernetes random-user execution. The serving binary remains in a separate image.
 
 ## Taxonomy caution
 

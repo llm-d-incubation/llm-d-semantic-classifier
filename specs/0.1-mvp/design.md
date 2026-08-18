@@ -1,7 +1,7 @@
 # 0.1 MVP Design
 
 ```text
-Dummy Praxis
+Dummy Gateway
    | gRPC
    v
 API/tonic

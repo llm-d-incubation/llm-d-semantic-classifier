@@ -4,11 +4,11 @@
 `src/bin/bench-runner.rs` — the benchmark runner binary that executes the
 `tests/HOMELAB.md` 0.1 protocol against the REAL classifier and emits
 machine-readable results. The maintainer runs it directly; it must also run
-unchanged on OpenShift later (only `LLM_D_SC_MODEL_DIR` / `BENCH_OUT` / CPU env
+unchanged on Kubernetes later (only `LLM_D_SC_MODEL_DIR` / `BENCH_OUT` / CPU env
 differ, never the code).
 
 ## Criterion
-AC-011 (OpenShift sidecar/ClusterIP RTT distributions captured). This runner is
+AC-011 (Kubernetes sidecar/ClusterIP RTT distributions captured). This runner is
 the measurement infrastructure the maintainer executes. The criterion's OWN
 tests (P-030..P-033, S-001/S-002) remain PENDING cluster measurement (see
 `LOCAL-GREEN.md`); this file proves the runner itself executes the protocol.

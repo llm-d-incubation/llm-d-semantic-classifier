@@ -1,4 +1,4 @@
-//! llm-d-sc service binary (OpenShift container entrypoint).
+//! llm-d-sc service binary (Kubernetes container entrypoint).
 //!
 //! Binds the existing [`ClassifyServer`] on `LLM_D_SC_LISTEN` (default
 //! `0.0.0.0:50051`) and reads the ModelCar mount directory from

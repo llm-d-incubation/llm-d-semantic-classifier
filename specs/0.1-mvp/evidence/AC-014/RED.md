@@ -4,7 +4,7 @@
 AC-014 requires the service's default telemetry (logs, metrics, trace capture)
 to never contain raw prompt or session text. Per `specs/0.1-mvp/test-plan.md`,
 AC-014 maps to U-085 (raw prompt absent from default logs/metrics) and I-085
-(trace capture has IDs/hashes but no raw prompt). No OpenShift system test is
+(trace capture has IDs/hashes but no raw prompt). No Kubernetes system test is
 mapped to AC-014, so this slice covers the local deterministic mechanics
 (U-085/I-085) only.
 
@@ -25,7 +25,7 @@ session text.
 ## RED state (no telemetry surface exists)
 There is no telemetry/logging/trace infrastructure anywhere in the crate:
 - no `telemetry` module (`src/lib.rs` registers only bench/cache/classify/
-  config/dummy_praxis/embedding/grpc/metrics/queue/ranker/runtime/tokenizer);
+  config/dummy_gateway/embedding/grpc/metrics/queue/ranker/runtime/tokenizer);
 - no tracing/logging dependency in `Cargo.toml` (only serde/serde_json/toml/
   candle/tonic/prost/tokio/blake3/tokenizers);
 - `src/metrics.rs` records only latency stages and cache hit/miss counters — no

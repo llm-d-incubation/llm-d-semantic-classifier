@@ -5,7 +5,7 @@
 //! [`ClassificationResult`], [`ClassifyStatus`], [`ClassifyError`]) and the
 //! [`ClassifierRuntime`] abstraction the service and Candle backend both
 //! implement. The response NEVER carries a route/endpoint field: routing/session
-//! authority remains Praxis (AC-010).
+//! authority remains the AI Gateway (AC-010).
 //!
 //! I-001 (AC-009) pins the RPC contract: a real tonic round trip returns ranked
 //! semantic signals over the wire. The Candle model is NOT required for that
@@ -23,6 +23,7 @@
 //! [`ClassificationResult`], keyed by a blake3 versioned fingerprint.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::cache::{CacheKey, SharedCache};
@@ -52,7 +53,7 @@ pub const WARMUP_INPUT: &str = "this is a golden sensitivity input";
 /// `text` is the supplied context to classify. `requested_signals` lists the
 /// semantic signals the caller wants; `session_metadata` is passed through
 /// verbatim and is NOT used to derive the classification (it is routing/session
-/// data owned by Praxis, AC-010).
+/// data owned by the AI Gateway, AC-010).
 #[derive(Debug, Clone)]
 pub struct ClassificationInput {
     pub text: String,
@@ -72,7 +73,7 @@ pub struct RankedSignal {
 /// Carries the classifier id and the exact revision fingerprint fields
 /// (model/tokenizer/taxonomy) that reproduce the result, the ranked signals,
 /// and a [`ClassifyStatus`]. It NEVER contains a route/endpoint field — routing
-/// authority is Praxis (AC-010).
+/// authority is the AI Gateway (AC-010).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassificationResult {
     pub classifier_id: String,
@@ -141,56 +142,204 @@ pub trait ClassifierRuntime {
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError>;
 }
 
+/// A generic classification service core shared by EVERY backend.
+///
+/// Wraps any [`ClassifierRuntime`] backend (`R`) and centralizes the exact-result
+/// cache, single-flight coalescing, hit/miss counters, and error behaviour so a
+/// synthetic and a production Candle backend inherit the SAME cache/metrics
+/// pipeline (AC-006/AC-007). The wrapped `R` performs the RAW forward only; a
+/// cache hit through the core never reaches the backend's tokenizer or model
+/// forward (AC-006), and identical concurrent misses coalesce into ONE forward
+/// (AC-007).
+///
+/// The struct is deliberately `{ runtime: R, cache: SharedCache, metrics: Metrics }`:
+/// the cache and the shared latency/counter registry live HERE, not inside any
+/// individual backend, so every backend inherits caching, single-flight
+/// coalescing, metrics, and error behaviour.
+#[derive(Clone)]
+pub struct ServiceCore<R> {
+    runtime: Arc<R>,
+    cache: SharedCache,
+    metrics: Metrics,
+}
+
+impl<R> ServiceCore<R>
+where
+    R: ClassifierRuntime + Send + Sync + 'static,
+{
+    /// Build a service core around a raw backend with a fresh cache and metrics.
+    pub fn new(runtime: R) -> Self {
+        Self::with_metrics(runtime, Metrics::new())
+    }
+
+    /// Build a service core whose cache and hit/miss/total/queue metrics record
+    /// into the CALLER-SUPPLIED [`Metrics`] handle, so the backend's own
+    /// tokenize/forward stage recording can share the same registry.
+    pub fn with_metrics(runtime: R, metrics: Metrics) -> Self {
+        ServiceCore {
+            runtime: Arc::new(runtime),
+            cache: SharedCache::new(),
+            metrics,
+        }
+    }
+
+    /// A SHARED handle to the core's metrics registry.
+    ///
+    /// The same handle is shared by the raw backend's tokenize/forward stage
+    /// recording and the server surface, so a snapshot sees every stage.
+    pub fn metrics(&self) -> Metrics {
+        self.metrics.clone()
+    }
+
+    /// Number of raw forwards (tokenizer + model) actually run across all
+    /// threads (cache misses). A cache hit does not increment this (AC-006).
+    pub fn forward_count(&self) -> u64 {
+        self.cache.forward_count()
+    }
+}
+
+impl<R> ClassifierRuntime for ServiceCore<R>
+where
+    R: ClassifierRuntime + Send + Sync + 'static,
+{
+    /// Classify `input` through the shared core: versioned cache -> single-flight
+    /// -> raw backend forward.
+    ///
+    /// A cache hit bypasses the backend's tokenizer and model forward entirely
+    /// (AC-006); identical concurrent misses coalesce into ONE forward (AC-007).
+    /// The cache stores the typed [`ClassificationResult`] keyed by the blake3
+    /// versioned fingerprint, and the hit/miss/total/queue metrics are recorded
+    /// here so EVERY backend inherits them.
+    fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
+        // Total service latency is measured from admission to response (AC-012).
+        let total_start = std::time::Instant::now();
+        let normalized = input.text.trim().to_string();
+        let key = CacheKey::new(
+            CLASSIFIER_ID,
+            MODEL_REVISION,
+            TOKENIZER_REVISION,
+            TAXONOMY_REVISION,
+            &normalized,
+        );
+        let metrics = self.metrics.clone();
+        // A miss runs the raw backend forward on the designated single-flight
+        // caller; a hit bypasses it entirely (AC-006). The flag distinguishes the
+        // two so the hit/miss counters partition every request.
+        let forward_ran = Arc::new(AtomicBool::new(false));
+        let forward = {
+            let runtime = self.runtime.clone();
+            let metrics = metrics.clone();
+            let forward_ran = forward_ran.clone();
+            let input = ClassificationInput {
+                text: normalized,
+                requested_signals: input.requested_signals,
+                session_metadata: input.session_metadata,
+            };
+            move || {
+                forward_ran.store(true, Ordering::SeqCst);
+                // Queue wait ends when the forward (dequeued work) begins.
+                metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
+                runtime.classify(input)
+            }
+        };
+        let result = self.cache.classify_concurrent(key, forward);
+        // Classify the request as a cache hit or miss and expose the counters.
+        if forward_ran.load(Ordering::SeqCst) {
+            metrics.record_cache_miss();
+        } else {
+            metrics.record_cache_hit();
+            // A hit's queue wait ends when the cached result is served.
+            metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
+        }
+        metrics.record_stage(LatencyStage::Total, total_start.elapsed());
+        result
+    }
+}
+
 /// The real Candle embedder + ranker path implementing [`ClassifierRuntime`].
 ///
-/// Embeds the input with the resident [`crate::embedding::Embedder`] (real
-/// Candle forward) and cosine-ranks the synthetic prototypes. Requires the
-/// fetched local model weights (gitignored), so the exercising tests are
-/// `#[ignore]`d and run explicitly with `-- --ignored` after `./hack/fetch-model`.
+/// This is the RAW backend: it performs only the real tokenize and model
+/// forward then rank. It carries NO cache and NO single-flight logic — those
+/// live in the generic [`ServiceCore`] that wraps it, so a production cache hit
+/// through the core never reaches the tokenizer or model forward (AC-006).
+///
+/// Instrumented counters (`tokenizer_call_counter` / `forward_call_counter`) prove
+/// a cache hit performs ZERO tokenizer calls and ZERO model forwards.
+///
+/// Requires the fetched local model weights (gitignored), so the exercising tests
+/// are `#[ignore]`d and run explicitly with `-- --ignored` after `./hack/fetch-model`.
 pub struct CandleClassifier {
     embedder: crate::embedding::Embedder,
     prototypes: Arc<Vec<Prototype>>,
-    cache: SharedCache,
     metrics: Metrics,
+    /// Number of real tokenizer invocations (instrumented for the parity test).
+    tokenizer_calls: Arc<AtomicU64>,
+    /// Number of real model forwards (instrumented for the parity test).
+    forward_calls: Arc<AtomicU64>,
 }
 
 impl CandleClassifier {
     /// Build a Candle classifier from a resident embedder and the prototype set.
     pub fn new(embedder: crate::embedding::Embedder, prototypes: Vec<Prototype>) -> Self {
+        Self::with_metrics(embedder, prototypes, Metrics::new())
+    }
+
+    /// Build a Candle classifier whose tokenize/forward stage recording shares
+    /// the CALLER-SUPPLIED [`Metrics`] handle.
+    pub fn with_metrics(
+        embedder: crate::embedding::Embedder,
+        prototypes: Vec<Prototype>,
+        metrics: Metrics,
+    ) -> Self {
         CandleClassifier {
             embedder,
             prototypes: Arc::new(prototypes),
-            cache: SharedCache::new(),
-            metrics: Metrics::new(),
+            metrics,
+            tokenizer_calls: Arc::new(AtomicU64::new(0)),
+            forward_calls: Arc::new(AtomicU64::new(0)),
         }
     }
 
     /// A SHARED handle to the classifier's metrics registry.
     ///
     /// The served path shares this same handle with the server surface and the
-    /// request executor, so cache-hit/miss counters and the stage decomposition
-    /// recorded by the real Candle forward are visible to a benchmark harness
-    /// (AC-012).
+    /// request executor, so the stage decomposition recorded by the real Candle
+    /// forward is visible to a benchmark harness (AC-012).
     pub fn metrics(&self) -> Metrics {
         self.metrics.clone()
     }
 
+    /// A SHARED tokenizer-call counter handle, incremented on every real Candle
+    /// tokenize. Clone it BEFORE moving the classifier into a [`ServiceCore`] so
+    /// a test can observe that a cache hit performs ZERO tokenizer calls.
+    pub fn tokenizer_call_counter(&self) -> Arc<AtomicU64> {
+        self.tokenizer_calls.clone()
+    }
+
+    /// A SHARED model-forward counter handle, incremented on every real Candle
+    /// model forward. Clone it BEFORE moving the classifier into a
+    /// [`ServiceCore`] so a test can observe that a cache hit performs ZERO
+    /// model forwards.
+    pub fn forward_call_counter(&self) -> Arc<AtomicU64> {
+        self.forward_calls.clone()
+    }
+
     /// Real Candle forward (tokenize + embed + rank) with the tokenize and
     /// forward stages measured independently from their own boundaries (AC-012).
-    fn real_forward(
-        &self,
-        text: &str,
-        metrics: &Metrics,
-    ) -> Result<ClassificationResult, ClassifyError> {
+    /// The runtime counters increment on every real tokenizer call / forward.
+    fn real_forward(&self, text: &str) -> Result<ClassificationResult, ClassifyError> {
         // Tokenize stage (AC-012): independently measured.
         let tokenize_start = std::time::Instant::now();
+        self.tokenizer_calls.fetch_add(1, Ordering::SeqCst);
         let ids = self
             .embedder
             .tokenize(text)
             .map_err(|e| ClassifyError::Embedding(e.to_string()))?;
-        metrics.record_stage(LatencyStage::Tokenize, tokenize_start.elapsed());
+        self.metrics
+            .record_stage(LatencyStage::Tokenize, tokenize_start.elapsed());
         // Forward stage (AC-012): the real embed + rank, independently measured.
         let forward_start = std::time::Instant::now();
+        self.forward_calls.fetch_add(1, Ordering::SeqCst);
         let embedding = self
             .embedder
             .embed_ids(ids)
@@ -199,7 +348,8 @@ impl CandleClassifier {
             .into_iter()
             .map(|(id, score)| RankedSignal { id, score })
             .collect();
-        metrics.record_stage(LatencyStage::Forward, forward_start.elapsed());
+        self.metrics
+            .record_stage(LatencyStage::Forward, forward_start.elapsed());
         Ok(ClassificationResult {
             classifier_id: CLASSIFIER_ID.to_string(),
             model_revision: MODEL_REVISION.to_string(),
@@ -235,50 +385,13 @@ impl ClassifierRuntime for CandleClassifier {
     /// Classify `input`, returning ranked semantic signals from the ACTUAL
     /// embedding.
     ///
-    /// Pipeline: versioned cache -> single-flight -> real Candle forward
-    /// (tokenize + embed + rank). A cache hit bypasses the forward entirely
-    /// (AC-006); identical concurrent misses coalesce into ONE forward. The
-    /// cache stores the typed [`ClassificationResult`] keyed by the blake3
-    /// versioned fingerprint.
+    /// RAW backend forward: tokenize + embed + rank, with the tokenize/forward
+    /// stages measured (AC-012). There is NO cache, single-flight, or hit/miss
+    /// logic here — the generic [`ServiceCore`] that wraps this backend provides
+    /// them, so a cache hit through the core never reaches this forward (AC-006).
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
-        // Total service latency is measured from admission to response (AC-012).
-        let total_start = std::time::Instant::now();
         let normalized = input.text.trim().to_string();
-        let key = CacheKey::new(
-            CLASSIFIER_ID,
-            MODEL_REVISION,
-            TOKENIZER_REVISION,
-            TAXONOMY_REVISION,
-            &normalized,
-        );
-        let metrics = self.metrics.clone();
-        // A miss runs the real forward closure on the designated single-flight
-        // caller; a hit bypasses it entirely (AC-006). The flag distinguishes the
-        // two so the hit/miss counters partition every request.
-        let forward_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let forward = {
-            let classifier = self;
-            let normalized = normalized.clone();
-            let metrics = metrics.clone();
-            let forward_ran = forward_ran.clone();
-            move || {
-                forward_ran.store(true, std::sync::atomic::Ordering::SeqCst);
-                // Queue wait ends when the forward (dequeued work) begins.
-                metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
-                classifier.real_forward(&normalized, &metrics)
-            }
-        };
-        let result = self.cache.classify_concurrent(key, forward);
-        // Classify the request as a cache hit or miss and expose the counters.
-        if forward_ran.load(std::sync::atomic::Ordering::SeqCst) {
-            metrics.record_cache_miss();
-        } else {
-            metrics.record_cache_hit();
-            // A hit's queue wait ends when the cached result is served.
-            metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
-        }
-        metrics.record_stage(LatencyStage::Total, total_start.elapsed());
-        result
+        self.real_forward(&normalized)
     }
 }
 
@@ -323,17 +436,15 @@ pub fn load_and_warm_modelcar<P: AsRef<std::path::Path>>(
 
 /// Deterministic classification pipeline (no model forward).
 ///
-/// Wires tokenizer -> versioned cache -> single-flight -> deterministic ranker
-/// over the synthetic prototypes, returning ranked semantic signals via the
-/// typed [`ClassificationResult`] — and NEVER a final route (routing authority
-/// is Praxis, AC-010).
+/// This is the RAW synthetic backend: it performs only the deterministic
+/// tokenize + rank forward. It carries NO cache and NO single-flight logic —
+/// those live in the generic [`ServiceCore`] that wraps it, so a cache hit
+/// through the core never reaches the tokenizer/ranker (AC-006).
 ///
-/// [`Clone`] is derived so the service can back a tonic server (which requires a
-/// `Clone + Send + Sync + 'static` service); the tokenizer and prototypes are
-/// shared read-only via [`Arc`].
+/// [`Clone`] is derived so the backend can be shared; the tokenizer and
+/// prototypes are shared read-only via [`Arc`].
 #[derive(Clone)]
 pub struct ClassifyService {
-    cache: SharedCache,
     tokenizer: Arc<Tokenizer>,
     prototypes: Arc<Vec<Prototype>>,
     metrics: Metrics,
@@ -353,7 +464,6 @@ impl ClassifyService {
         metrics: Metrics,
     ) -> Self {
         Self {
-            cache: SharedCache::new(),
             tokenizer: Arc::new(tokenizer),
             prototypes: Arc::new(prototypes),
             metrics,
@@ -392,18 +502,15 @@ impl ClassifyService {
     /// against the synthetic prototypes. No model forward. A tokenization
     /// failure is an explicit [`ClassifyError::Tokenizer`] — never a fabricated
     /// label (spec failure contract).
-    fn deterministic_classify(
-        &self,
-        context: &str,
-        metrics: &Metrics,
-    ) -> Result<ClassificationResult, ClassifyError> {
+    fn deterministic_classify(&self, context: &str) -> Result<ClassificationResult, ClassifyError> {
         // Tokenize stage (AC-012): independently measured.
         let tokenize_start = std::time::Instant::now();
         let ids = self
             .tokenizer
             .tokenize(context)
             .map_err(|e| ClassifyError::Tokenizer(e.to_string()))?;
-        metrics.record_stage(LatencyStage::Tokenize, tokenize_start.elapsed());
+        self.metrics
+            .record_stage(LatencyStage::Tokenize, tokenize_start.elapsed());
         // Forward stage (AC-012): the deterministic embed + rank, independently
         // measured from the tokenize boundary.
         let forward_start = std::time::Instant::now();
@@ -415,7 +522,8 @@ impl ClassifyService {
             .into_iter()
             .map(|(id, score)| RankedSignal { id, score })
             .collect();
-        metrics.record_stage(LatencyStage::Forward, forward_start.elapsed());
+        self.metrics
+            .record_stage(LatencyStage::Forward, forward_start.elapsed());
         Ok(ClassificationResult {
             classifier_id: CLASSIFIER_ID.to_string(),
             model_revision: MODEL_REVISION.to_string(),
@@ -430,50 +538,14 @@ impl ClassifyService {
 impl ClassifierRuntime for ClassifyService {
     /// Classify `input`, returning ranked semantic signals.
     ///
-    /// Pipeline: tokenizer -> versioned cache -> single-flight -> deterministic
-    /// ranker over the synthetic prototypes. A cache hit bypasses tokenization
-    /// and ranking; identical concurrent misses coalesce into one forward. The
-    /// cache stores the typed [`ClassificationResult`] keyed by the blake3
-    /// versioned fingerprint.
+    /// RAW backend forward: deterministic tokenize + rank over the synthetic
+    /// prototypes, with the tokenize/forward stages measured (AC-012). There is
+    /// NO cache, single-flight, or hit/miss logic here — the generic
+    /// [`ServiceCore`] that wraps this backend provides them, so a cache hit
+    /// through the core never reaches this forward (AC-006).
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
-        // Total service latency is measured from admission to response (AC-012).
-        let total_start = std::time::Instant::now();
         let normalized = input.text.trim().to_string();
-        let key = CacheKey::new(
-            CLASSIFIER_ID,
-            MODEL_REVISION,
-            TOKENIZER_REVISION,
-            TAXONOMY_REVISION,
-            &normalized,
-        );
-        let metrics = self.metrics.clone();
-        // A miss runs the forward closure (tokenize + rank) on the designated
-        // single-flight caller; a hit bypasses it entirely (AC-006). The flag
-        // distinguishes the two so the hit/miss counters partition every request.
-        let forward_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let forward = {
-            let service = self.clone();
-            let normalized = normalized.clone();
-            let metrics = metrics.clone();
-            let forward_ran = forward_ran.clone();
-            move || {
-                forward_ran.store(true, std::sync::atomic::Ordering::SeqCst);
-                // Queue wait ends when the forward (dequeued work) begins.
-                metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
-                service.deterministic_classify(&normalized, &metrics)
-            }
-        };
-        let result = self.cache.classify_concurrent(key, forward);
-        // Classify the request as a cache hit or miss and expose the counters.
-        if forward_ran.load(std::sync::atomic::Ordering::SeqCst) {
-            metrics.record_cache_miss();
-        } else {
-            metrics.record_cache_hit();
-            // A hit's queue wait ends when the cached result is served.
-            metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
-        }
-        metrics.record_stage(LatencyStage::Total, total_start.elapsed());
-        result
+        self.deterministic_classify(&normalized)
     }
 }
 
@@ -548,19 +620,24 @@ mod tests {
         );
     }
 
-    /// U-071 (AC-006): an identical re-classification returns the exact cached
-    /// result (single-flight + exact cache), and the revision fingerprint fields
-    /// are stable. Two identical inputs must produce identical results.
+    /// U-071 (AC-006): an identical re-classification through the generic
+    /// [`ServiceCore`] returns the exact cached result (single-flight + exact
+    /// cache), and the revision fingerprint fields are stable. Two identical
+    /// inputs must produce identical results.
     #[test]
     fn u071_identical_inputs_return_identical_results() {
-        let service = ClassifyService::from_synthetic_fixtures();
+        // The deterministic raw backend is wrapped in the shared core so the
+        // second identical call is served from the cache (AC-006), proving the
+        // cache pipeline lives in the core, not the backend.
+        let core =
+            ServiceCore::with_metrics(ClassifyService::from_synthetic_fixtures(), Metrics::new());
         let input = ClassificationInput {
             text: "this is a golden sensitivity input".to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::new(),
         };
-        let first = service.classify(input.clone()).expect("first classify");
-        let second = service.classify(input).expect("second classify");
+        let first = core.classify(input.clone()).expect("first classify");
+        let second = core.classify(input).expect("second classify");
         assert_eq!(
             first, second,
             "identical inputs must produce identical results"
@@ -594,6 +671,84 @@ mod tests {
         assert!(
             !result.ranked.is_empty(),
             "candle path must return ranked semantic signals"
+        );
+    }
+
+    /// SERVICE-CORE (P0): a PRODUCTION Candle cache hit must perform ZERO
+    /// tokenizer calls and ZERO model forwards. The exact-result cache +
+    /// single-flight live in the generic [`ServiceCore`], so a cache hit through
+    /// the core NEVER reaches the raw Candle runtime's tokenizer or model
+    /// forward. Counters are instrumented on the runtime (tokenizer calls /
+    /// model forwards). Requires the fetched model weights (gitignored), so this
+    /// parity-tier test is #[ignore]d and runs under `./hack/test-parity`.
+    #[test]
+    #[ignore]
+    fn service_core_production_candle_cache_hit_zero_tokenizer_zero_forward() {
+        use std::sync::atomic::Ordering;
+        let model_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("artifacts")
+            .join("models")
+            .join("sensitivity");
+        let classifier = CandleClassifier::from_modelcar(&model_dir)
+            .expect("candle classifier must load from the fetched sensitivity model");
+        // Observe the runtime's tokenizer/forward counters AFTER the classifier
+        // is moved into the core, so a cache hit's zero-calls is proven on the
+        // production path (the raw Candle forward, not the synthetic one).
+        let tokenizer_calls = classifier.tokenizer_call_counter();
+        let forward_calls = classifier.forward_call_counter();
+        let core = ServiceCore::with_metrics(classifier, Metrics::new());
+
+        let golden = ClassificationInput {
+            text: WARMUP_INPUT.to_string(),
+            requested_signals: vec!["sensitivity".to_string()],
+            session_metadata: HashMap::new(),
+        };
+
+        // Miss: exactly one tokenizer call and one model forward.
+        let miss = core
+            .classify(golden.clone())
+            .expect("cache miss must classify");
+        assert_eq!(
+            tokenizer_calls.load(Ordering::SeqCst),
+            1,
+            "a cache miss runs exactly one tokenizer call"
+        );
+        assert_eq!(
+            forward_calls.load(Ordering::SeqCst),
+            1,
+            "a cache miss runs exactly one model forward"
+        );
+
+        // Hit: ZERO new tokenizer calls and ZERO new model forwards (AC-006).
+        let hit = core.classify(golden).expect("cache hit must classify");
+        assert_eq!(
+            tokenizer_calls.load(Ordering::SeqCst),
+            1,
+            "a production cache hit must perform ZERO tokenizer calls"
+        );
+        assert_eq!(
+            forward_calls.load(Ordering::SeqCst),
+            1,
+            "a production cache hit must perform ZERO model forwards"
+        );
+        assert_eq!(miss, hit, "cache hit must return the exact cached result");
+
+        // A distinct input is a fresh miss: both runtime counters increment.
+        let other = ClassificationInput {
+            text: "a distinct sensitivity context for a fresh miss".to_string(),
+            requested_signals: vec!["sensitivity".to_string()],
+            session_metadata: HashMap::new(),
+        };
+        core.classify(other).expect("distinct input must classify");
+        assert_eq!(
+            tokenizer_calls.load(Ordering::SeqCst),
+            2,
+            "a distinct input runs a fresh tokenizer call"
+        );
+        assert_eq!(
+            forward_calls.load(Ordering::SeqCst),
+            2,
+            "a distinct input runs a fresh model forward"
         );
     }
 

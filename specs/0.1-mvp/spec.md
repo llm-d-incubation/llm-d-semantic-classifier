@@ -1,10 +1,10 @@
 # 0.1 MVP Specification
 
 ## Problem
-Praxis needs a low-latency semantic-classification callout without embedding classifier runtime/model lifecycle into the router.
+the AI Gateway needs a low-latency semantic-classification callout without embedding classifier runtime/model lifecycle into the router.
 
 ## Desired behavior
-A long-lived Rust service accepts a classification request, invokes a resident classifier through a runtime abstraction, and returns versioned semantic evidence. Praxis remains responsible for routing/enforcement.
+A long-lived Rust service accepts a classification request, invokes a resident classifier through a runtime abstraction, and returns versioned semantic evidence. the AI Gateway remains responsible for routing/enforcement.
 
 ## In scope
 - Rust service;
@@ -14,12 +14,12 @@ A long-lived Rust service accepts a classification request, invokes a resident c
 - model/tokenizer residency;
 - supplied sensitivity embedding model fixture;
 - Red Hat-style OCI ModelCar delivery;
-- dummy Praxis integration;
+- dummy gateway integration;
 - exact-result cache;
 - bounded MVP queue;
 - warmup/readiness;
 - latency decomposition metrics;
-- OpenShift sidecar and ClusterIP benchmark.
+- Kubernetes sidecar and ClusterIP benchmark.
 
 ## Non-goals
 Routing policy, stickiness, distributed state, training/SDG/fine-tuning, custom kernels, vLLM backend implementation, multi-signal orchestration, production control plane, universal hard 20 ms SLA.
@@ -29,7 +29,7 @@ Authoritative: active classifier/model/tokenizer/runtime revision and metadata r
 
 Disposable: exact-result cache and future feature/session caches.
 
-Routing/session authority remains Praxis.
+Routing/session authority remains the AI Gateway.
 
 ## Failure contract
 - missing/corrupt model -> not ready;
@@ -47,9 +47,9 @@ Routing/session authority remains Praxis.
 - AC-006 cache hit bypasses tokenizer/model forward.
 - AC-007 identical concurrent misses do not create unbounded forwards.
 - AC-008 queue bounded; overload explicit.
-- AC-009 dummy Praxis consumes response over persistent gRPC.
+- AC-009 dummy gateway consumes response over persistent gRPC.
 - AC-010 response contains signals, not final route.
-- AC-011 OpenShift sidecar/ClusterIP RTT distributions captured.
+- AC-011 Kubernetes sidecar/ClusterIP RTT distributions captured.
 - AC-012 queue/tokenize/forward/total latency visible.
 - AC-013 restart + complete context recomputes correctly.
 - AC-014 default telemetry contains no raw prompt/session text.

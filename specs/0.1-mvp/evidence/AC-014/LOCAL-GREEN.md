@@ -4,7 +4,7 @@
 The local deterministic telemetry mechanics for AC-014 are GREEN: a telemetry
 recorder and a server trace-capture surface exist, and the tests mapped to AC-014
 (U-085, I-085) pass locally. Per `specs/0.1-mvp/test-plan.md`, AC-014 maps to
-U-085 and I-085 only — there is NO OpenShift system test for AC-014, so this
+U-085 and I-085 only — there is NO Kubernetes system test for AC-014, so this
 LOCAL-GREEN covers the whole mapped set.
 
 ## Criterion
@@ -55,7 +55,7 @@ Exit code 0.
 
 ## Gate
 `./hack/test-impact` and `./hack/spec-check 0.1-mvp` and `./hack/verify` are run
-after this evidence (see the turn summary). No OpenShift system tier is mapped to
+after this evidence (see the turn summary). No Kubernetes system tier is mapped to
 AC-014, so PROMOTION-GREEN is not applicable and is not written by the worker.
 
 ## Worktree / SHA

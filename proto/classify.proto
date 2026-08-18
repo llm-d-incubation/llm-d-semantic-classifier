@@ -15,7 +15,7 @@ enum ClassificationStatus {
   UNAVAILABLE = 3;
 }
 
-// A classification request from the (dummy) Praxis client.
+// A classification request from the (dummy) the AI Gateway client.
 message ClassifyRequest {
   string request_id = 1;
   string session_id = 2;
@@ -34,7 +34,7 @@ message RankedSignal {
 // Carries request_id, classifier_id, the exact model/tokenizer/taxonomy
 // revisions required to reproduce the result, a ClassificationStatus, and the
 // ranked RankedSignal entries. The schema contains NO route/endpoint field
-// (ADR-0001, AC-010): routing/session authority stays with Praxis, and a route
+// (ADR-0001, AC-010): routing/session authority stays with the AI Gateway, and a route
 // is unrepresentable on the wire rather than merely discouraged.
 message ClassifyResponse {
   string request_id = 1;

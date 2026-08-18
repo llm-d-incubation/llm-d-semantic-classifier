@@ -74,8 +74,8 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | I-002 | persistent HTTP/2 channel reused | 0.1 |
 | I-003 | request deadline propagates | 0.20 |
 | I-004 | gRPC status taxonomy matches contract | 0.20 |
-| I-005 | dummy Praxis preserves session metadata | 0.1 |
-| I-006 | dummy Praxis consumes signal then routes outside llm-d-sc | 0.1 |
+| I-005 | dummy gateway preserves session metadata | 0.1 |
+| I-006 | dummy gateway consumes signal then routes outside llm-d-sc | 0.1 |
 | I-007 | llm-d-sc response cannot dictate endpoint | 0.1 |
 | I-008 | multi-turn requests do not reconnect per call | 0.1 |
 | I-010 | server not ready before artifact/warmup | 0.1 |
@@ -98,7 +98,7 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | I-040 | two replicas/independent caches return equivalent full-context result | 0.22 |
 | I-045 | restart + full context recomputes correctly | 0.1 |
 | I-046 | restart + weak delta/insufficient context abstains | 0.22 |
-| I-047 | dummy Praxis retains conservative fixture route after abstention | 0.22 |
+| I-047 | dummy gateway retains conservative fixture route after abstention | 0.22 |
 | I-050 | one signal succeeds while another fails | 0.23 |
 | I-051 | multi-signal deadline behavior deterministic | 0.23 |
 | I-052 | one classifier queue cannot starve another | 0.23 |
@@ -114,22 +114,22 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | I-081 | overload counter increments | 0.20 |
 | I-085 | trace capture has IDs/hashes but no raw prompt | 0.1 |
 
-## OpenShift system
+## Kubernetes system
 
 | ID | Test | Phase |
 |---|---|---:|
-| S-001 | dummy Praxis + llm-d-sc same Pod sidecar E2E | 0.1 |
+| S-001 | dummy gateway + llm-d-sc same Pod sidecar E2E | 0.1 |
 | S-002 | separate Pods via ClusterIP E2E | 0.1 |
 | S-003 | same-node service-to-service where schedulable | 0.21 |
 | S-004 | cross-node service-to-service where possible | 0.21 |
 | S-006 | readiness blocks traffic until warm model | 0.1 |
-| S-010 | OpenShift random UID/restricted context | 0.1 |
+| S-010 | arbitrary non-root UID under a restricted security context | 0.1 |
 | S-011 | model data read-only to runtime | 0.20 |
 | S-012 | NetworkPolicy restricts expected traffic | 0.30 |
 | S-020 | kill/restart llm-d-sc then full-context recompute | 0.1 |
 | S-021 | warm cache lost on replacement, service recovers | 0.22 |
 | S-022 | active session + cache loss + weak delta -> abstain | 0.22 |
-| S-023 | dummy Praxis preserves conservative route until context recovers | 0.22 |
+| S-023 | dummy gateway preserves conservative route until context recovers | 0.22 |
 | S-024 | crash loop never returns fabricated success | 0.30 |
 | S-030 | scale 1 -> 3 replicas | 0.30 |
 | S-031 | independent caches remain correctness-equivalent | 0.30 |
@@ -169,10 +169,10 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | P-021 | concurrency 4 | 0.1 |
 | P-022 | concurrency 16 | 0.21 |
 | P-023 | concurrency 32/saturation | 0.21 |
-| P-030 | dummy Praxis -> same-Pod cache-hit RTT | 0.1 |
-| P-031 | dummy Praxis -> same-Pod cache-miss RTT | 0.1 |
-| P-032 | dummy Praxis -> ClusterIP cache-hit RTT | 0.1 |
-| P-033 | dummy Praxis -> ClusterIP cache-miss RTT | 0.1 |
+| P-030 | dummy gateway -> same-Pod cache-hit RTT | 0.1 |
+| P-031 | dummy gateway -> same-Pod cache-miss RTT | 0.1 |
+| P-032 | dummy gateway -> ClusterIP cache-hit RTT | 0.1 |
+| P-033 | dummy gateway -> ClusterIP cache-miss RTT | 0.1 |
 | P-034 | no-op transport floor sidecar | 0.21 |
 | P-035 | no-op transport floor ClusterIP | 0.21 |
 | P-036 | same-node vs cross-node delta | 0.21 |

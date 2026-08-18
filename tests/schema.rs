@@ -2,7 +2,7 @@
 //!
 //! The classify response schema must contain NO final route/endpoint/target
 //! field (ADR-0001 interpretation (B): the field is removed entirely, not merely
-//! "never set"). Routing/session authority stays with Praxis, and the wire
+//! "never set"). Routing/session authority stays with the AI Gateway, and the wire
 //! contract should make the alternative unrepresentable.
 //!
 //! This is a plain `#[test]` (no network, no async) that reads the committed

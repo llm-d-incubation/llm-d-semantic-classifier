@@ -4,9 +4,9 @@
 U-011 (unknown signal explicit error).
 
 ## Why it lives under AC-009 (decision recorded)
-AC-009 is "dummy Praxis consumes response over persistent gRPC" — its proving
+AC-009 is "dummy gateway consumes response over persistent gRPC" — its proving
 domain is the request/response contract carried over the persistent channel,
-including the `requested_signals` the dummy Praxis sends in the request. U-011
+including the `requested_signals` the dummy gateway sends in the request. U-011
 validates those requested signals (accept `sensitivity`, reject anything else),
 which is a request-side contract concern. AC-010 is strictly about the response
 schema not carrying a route; U-011 is request validation, not response schema.

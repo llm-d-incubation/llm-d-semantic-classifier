@@ -1,4 +1,4 @@
-# llm-d-sc OpenShift service container: multi-stage build, no model baked in.
+# llm-d-sc Kubernetes service container: multi-stage build, no model baked in.
 #
 # The real model is NOT in this image; it arrives via a ModelCar mount at /models
 # (LLM_D_SC_MODEL_DIR). The served pipeline loads and warms that real model.

@@ -35,7 +35,7 @@ PASSED — 5 passed; 0 failed (incl. new I-007).
    declarations, and asserts none of `final_route`/`route`/`endpoint`/`target`
    is a field name.
 4. Added `tests/grpc.rs` `i007_response_cannot_dictate_endpoint` — drives the
-   dummy Praxis against the real server and asserts the only route in the system
+   dummy gateway against the real server and asserts the only route in the system
    is the dummy's own test-only mapping; the response type offers no route to
    consume.
 
