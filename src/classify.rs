@@ -150,6 +150,8 @@ pub trait ClassifierRuntime {
 pub struct CandleClassifier {
     embedder: crate::embedding::Embedder,
     prototypes: Arc<Vec<Prototype>>,
+    cache: SharedCache,
+    metrics: Metrics,
 }
 
 impl CandleClassifier {
@@ -158,7 +160,54 @@ impl CandleClassifier {
         CandleClassifier {
             embedder,
             prototypes: Arc::new(prototypes),
+            cache: SharedCache::new(),
+            metrics: Metrics::new(),
         }
+    }
+
+    /// A SHARED handle to the classifier's metrics registry.
+    ///
+    /// The served path shares this same handle with the server surface and the
+    /// request executor, so cache-hit/miss counters and the stage decomposition
+    /// recorded by the real Candle forward are visible to a benchmark harness
+    /// (AC-012).
+    pub fn metrics(&self) -> Metrics {
+        self.metrics.clone()
+    }
+
+    /// Real Candle forward (tokenize + embed + rank) with the tokenize and
+    /// forward stages measured independently from their own boundaries (AC-012).
+    fn real_forward(
+        &self,
+        text: &str,
+        metrics: &Metrics,
+    ) -> Result<ClassificationResult, ClassifyError> {
+        // Tokenize stage (AC-012): independently measured.
+        let tokenize_start = std::time::Instant::now();
+        let ids = self
+            .embedder
+            .tokenize(text)
+            .map_err(|e| ClassifyError::Embedding(e.to_string()))?;
+        metrics.record_stage(LatencyStage::Tokenize, tokenize_start.elapsed());
+        // Forward stage (AC-012): the real embed + rank, independently measured.
+        let forward_start = std::time::Instant::now();
+        let embedding = self
+            .embedder
+            .embed_ids(ids)
+            .map_err(|e| ClassifyError::Embedding(e.to_string()))?;
+        let ranked = cosine_rank(&embedding, &self.prototypes)
+            .into_iter()
+            .map(|(id, score)| RankedSignal { id, score })
+            .collect();
+        metrics.record_stage(LatencyStage::Forward, forward_start.elapsed());
+        Ok(ClassificationResult {
+            classifier_id: CLASSIFIER_ID.to_string(),
+            model_revision: MODEL_REVISION.to_string(),
+            tokenizer_revision: TOKENIZER_REVISION.to_string(),
+            taxonomy_revision: TAXONOMY_REVISION.to_string(),
+            status: ClassifyStatus::Ok,
+            ranked,
+        })
     }
 
     /// Build the classifier from the fetched sensitivity model artifacts and the
@@ -183,23 +232,53 @@ impl CandleClassifier {
 }
 
 impl ClassifierRuntime for CandleClassifier {
+    /// Classify `input`, returning ranked semantic signals from the ACTUAL
+    /// embedding.
+    ///
+    /// Pipeline: versioned cache -> single-flight -> real Candle forward
+    /// (tokenize + embed + rank). A cache hit bypasses the forward entirely
+    /// (AC-006); identical concurrent misses coalesce into ONE forward. The
+    /// cache stores the typed [`ClassificationResult`] keyed by the blake3
+    /// versioned fingerprint.
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
-        let embedding = self
-            .embedder
-            .embed(&input.text)
-            .map_err(|e| ClassifyError::Embedding(e.to_string()))?;
-        let ranked = cosine_rank(&embedding, &self.prototypes)
-            .into_iter()
-            .map(|(id, score)| RankedSignal { id, score })
-            .collect();
-        Ok(ClassificationResult {
-            classifier_id: CLASSIFIER_ID.to_string(),
-            model_revision: MODEL_REVISION.to_string(),
-            tokenizer_revision: TOKENIZER_REVISION.to_string(),
-            taxonomy_revision: TAXONOMY_REVISION.to_string(),
-            status: ClassifyStatus::Ok,
-            ranked,
-        })
+        // Total service latency is measured from admission to response (AC-012).
+        let total_start = std::time::Instant::now();
+        let normalized = input.text.trim().to_string();
+        let key = CacheKey::new(
+            CLASSIFIER_ID,
+            MODEL_REVISION,
+            TOKENIZER_REVISION,
+            TAXONOMY_REVISION,
+            &normalized,
+        );
+        let metrics = self.metrics.clone();
+        // A miss runs the real forward closure on the designated single-flight
+        // caller; a hit bypasses it entirely (AC-006). The flag distinguishes the
+        // two so the hit/miss counters partition every request.
+        let forward_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let forward = {
+            let classifier = self;
+            let normalized = normalized.clone();
+            let metrics = metrics.clone();
+            let forward_ran = forward_ran.clone();
+            move || {
+                forward_ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                // Queue wait ends when the forward (dequeued work) begins.
+                metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
+                classifier.real_forward(&normalized, &metrics)
+            }
+        };
+        let result = self.cache.classify_concurrent(key, forward);
+        // Classify the request as a cache hit or miss and expose the counters.
+        if forward_ran.load(std::sync::atomic::Ordering::SeqCst) {
+            metrics.record_cache_miss();
+        } else {
+            metrics.record_cache_hit();
+            // A hit's queue wait ends when the cached result is served.
+            metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
+        }
+        metrics.record_stage(LatencyStage::Total, total_start.elapsed());
+        result
     }
 }
 

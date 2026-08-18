@@ -148,6 +148,35 @@ fn warmup_context(cache_mode: CacheMode, run_id: u64, index: u64) -> String {
     }
 }
 
+/// The seed-aware measured context: an optional length-specific `seed` (e.g. a
+/// base input approximating a target sequence length) is prefixed onto the
+/// per-run `measure-{run_id}-{index}` namespace. An empty seed reproduces
+/// [`measure_context`] exactly.
+fn seeded_measure_context(seed: &str, run_id: u64, index: u64) -> String {
+    if seed.is_empty() {
+        measure_context(run_id, index)
+    } else {
+        format!("{seed}-measure-{run_id}-{index}")
+    }
+}
+
+/// The seed-aware warmup context (see [`warmup_context`]): Hit pre-warms
+/// EXACTLY the seeded measured key; Miss warms a seed-scoped `-warm-{index}`
+/// namespace disjoint from the measured namespace. An empty seed reproduces
+/// [`warmup_context`] exactly.
+fn seeded_warm_context(cache_mode: CacheMode, seed: &str, run_id: u64, index: u64) -> String {
+    match cache_mode {
+        CacheMode::Hit => seeded_measure_context(seed, run_id, index),
+        CacheMode::Miss => {
+            if seed.is_empty() {
+                warmup_context(cache_mode, run_id, index)
+            } else {
+                format!("{seed}-warm-{index}")
+            }
+        }
+    }
+}
+
 /// Verify the harness's OWN methodology from the cache counters captured around
 /// a measured window.
 ///
@@ -209,6 +238,11 @@ pub struct BenchmarkRun {
     cache_mode: CacheMode,
     run_id: u64,
     metrics: Option<Metrics>,
+    /// A per-run seed (e.g. a length-specific base input) prefixed onto every
+    /// measured/warmup context so a scenario genuinely exercises the intended
+    /// input length while keeping the disjoint warmup/measured namespaces.
+    /// Empty (the default) reproduces the original key scheme exactly.
+    seed: String,
 }
 
 impl BenchmarkRun {
@@ -250,7 +284,40 @@ impl BenchmarkRun {
             cache_mode,
             run_id: NEXT_RUN_ID.fetch_add(1, Ordering::SeqCst),
             metrics,
+            seed: String::new(),
         })
+    }
+
+    /// Prefix a length-specific seed onto every measured/warmup context.
+    ///
+    /// The seed (e.g. a base input whose tokenized length approximates a target
+    /// sequence length) is prepended to each per-run `measure-{run_id}-{index}`
+    /// / `warm-{index}` key, so the scenario's requests genuinely carry the
+    /// intended input length while the harness's disjoint key namespaces and
+    /// methodology self-check are preserved. An empty seed (the default) keeps
+    /// the original key scheme byte-for-byte identical.
+    pub fn with_seed(mut self, seed: impl Into<String>) -> Self {
+        self.seed = seed.into();
+        self
+    }
+
+    /// The unique per-run id, usable to reconstruct the exact measured contexts.
+    pub fn run_id(&self) -> u64 {
+        self.run_id
+    }
+
+    /// The measured context for `index`: the length-specific `seed` (if any)
+    /// plus a per-run, per-index `measure-{run_id}-{index}` namespace that is
+    /// NEVER pre-warmed in Miss mode and EXACTLY pre-warmed in Hit mode.
+    fn measured_context(&self, index: u64) -> String {
+        seeded_measure_context(&self.seed, self.run_id, index)
+    }
+
+    /// The warmup context for `index` (see [`warmup_context`]): Hit pre-warms
+    /// EXACTLY the measured key; Miss warms a seed-scoped `-warm-{index}`
+    /// namespace disjoint from the measured namespace.
+    fn warm_context(&self, index: u64) -> String {
+        seeded_warm_context(self.cache_mode, &self.seed, self.run_id, index)
     }
 
     /// Send one classify-and-route turn with an explicit context and return its
@@ -275,7 +342,7 @@ impl BenchmarkRun {
     ///   (`measure-{run_id}-{i}`), so a later measurement genuinely hits.
     pub fn warmup(&self, n: u64) -> Result<(), BenchError> {
         for i in 0..n {
-            let context = warmup_context(self.cache_mode, self.run_id, i);
+            let context = self.warm_context(i);
             self.send_one(&context, i).map_err(BenchError::Request)?;
         }
         Ok(())
@@ -293,7 +360,7 @@ impl BenchmarkRun {
         let mut samples = Vec::with_capacity(n as usize);
         for i in 0..n {
             samples.push(
-                self.send_one(&measure_context(self.run_id, i), i)
+                self.send_one(&self.measured_context(i), i)
                     .map_err(BenchError::Request)?,
             );
         }
@@ -347,7 +414,7 @@ impl BenchmarkRun {
         let workers = concurrency.max(1);
         let addr = self.addr.clone();
         let run_id = self.run_id;
-        let cache_mode = self.cache_mode;
+        let seed = self.seed.clone();
         let mut handles = Vec::with_capacity(workers as usize);
         let base = n / workers;
         let extra = n % workers;
@@ -356,15 +423,13 @@ impl BenchmarkRun {
             let count = base + if w < extra { 1 } else { 0 };
             let end = start + count;
             let addr = addr.clone();
+            let seed = seed.clone();
             handles.push(std::thread::spawn(move || -> Result<Vec<_>, BenchError> {
                 // Per-worker client over the persistent channel (I-008).
                 let mut praxis = DummyPraxis::connect(addr).map_err(BenchError::Io)?;
                 let mut samples = Vec::with_capacity(count as usize);
                 for i in start..end {
-                    let context = match cache_mode {
-                        CacheMode::Hit => measure_context(run_id, i),
-                        CacheMode::Miss => measure_context(run_id, i),
-                    };
+                    let context = seeded_measure_context(&seed, run_id, i);
                     let req = DummyRequest {
                         request_id: format!("bench-concurrent-{i}"),
                         session_id: format!("bench-session-{}", i % 4),
@@ -485,6 +550,40 @@ mod tests {
                 "two runs must not share measured keys"
             );
         }
+    }
+
+    /// With a non-empty seed (the benchmark runner's length-specific base), the
+    /// measured and miss-warmup namespaces stay DISJOINT and hit-mode warmup
+    /// pre-warms EXACTLY the measured keys, so the harness's methodology
+    /// self-check still holds for length-variable scenarios.
+    #[test]
+    fn seed_aware_namespaces_preserve_methodology() {
+        let seed = "benchmark benchmark";
+        for i in 0..100 {
+            // Miss-mode warmup must never collide with a measured key.
+            assert_ne!(
+                seeded_warm_context(CacheMode::Miss, seed, 7, i),
+                seeded_measure_context(seed, 7, i),
+                "seeded miss-mode warmup must never collide with a measured key"
+            );
+            // The measured context carries the seed prefix (the intended length).
+            assert!(
+                seeded_measure_context(seed, 7, i).starts_with(seed),
+                "seeded measured context must carry the length-specific seed"
+            );
+            // Hit-mode warmup pre-warms EXACTLY the measured key.
+            assert_eq!(
+                seeded_warm_context(CacheMode::Hit, seed, 7, i),
+                seeded_measure_context(seed, 7, i),
+                "seeded hit-mode warmup must pre-warm exactly the measured key"
+            );
+        }
+        // An empty seed reproduces the original key scheme exactly.
+        assert_eq!(seeded_measure_context("", 7, 3), measure_context(7, 3));
+        assert_eq!(
+            seeded_warm_context(CacheMode::Miss, "", 7, 3),
+            warmup_context(CacheMode::Miss, 7, 3)
+        );
     }
 
     /// A snapshot helper: a metrics snapshot with the given cache counters.

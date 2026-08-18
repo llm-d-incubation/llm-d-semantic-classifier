@@ -8,8 +8,11 @@ use llm_d_sc::classify::{ClassificationResult, ClassifyStatus, RankedSignal};
 use std::time::{Duration, Instant};
 
 fn pct(v: &[Duration], p: f64) -> Duration {
-    let mut s = v.to_vec(); s.sort();
-    s[(((s.len() as f64) * p).ceil() as usize).saturating_sub(1).min(s.len() - 1)]
+    let mut s = v.to_vec();
+    s.sort();
+    s[(((s.len() as f64) * p).ceil() as usize)
+        .saturating_sub(1)
+        .min(s.len() - 1)]
 }
 
 #[test]
@@ -28,11 +31,16 @@ fn cache_hit_cost() {
             tokenizer_revision: "rev-tok".into(),
             taxonomy_revision: "rev-tax".into(),
             status: ClassifyStatus::Ok,
-            ranked: vec![RankedSignal { id: "proto-a".into(), score: 0.42 }],
+            ranked: vec![RankedSignal {
+                id: "proto-a".into(),
+                score: 0.42,
+            }],
         };
         let r0 = result.clone();
         let _ = cache.classify_concurrent(k(), move || Ok(r0));
-        for _ in 0..500 { let _ = cache.classify_concurrent(k(), || unreachable!("must be a hit")); }
+        for _ in 0..500 {
+            let _ = cache.classify_concurrent(k(), || unreachable!("must be a hit"));
+        }
         let n = 5000;
         let mut lat = Vec::with_capacity(n);
         let t0 = Instant::now();
@@ -43,9 +51,15 @@ fn cache_hit_cost() {
         }
         let wall = t0.elapsed();
         let us = |d: Duration| d.as_secs_f64() * 1_000_000.0;
-        println!("  {:>11} | {:>5} | {:>10.2}us | {:>5.2}us | {:>5.2}us | {:>7.0}",
-            text.len(), n, us(pct(&lat,0.5)), us(pct(&lat,0.95)), us(pct(&lat,0.99)),
-            n as f64 / wall.as_secs_f64());
+        println!(
+            "  {:>11} | {:>5} | {:>10.2}us | {:>5.2}us | {:>5.2}us | {:>7.0}",
+            text.len(),
+            n,
+            us(pct(&lat, 0.5)),
+            us(pct(&lat, 0.95)),
+            us(pct(&lat, 0.99)),
+            n as f64 / wall.as_secs_f64()
+        );
     }
     println!();
 }

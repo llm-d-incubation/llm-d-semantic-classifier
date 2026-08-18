@@ -8,14 +8,17 @@ use std::time::{Duration, Instant};
 fn pct(v: &[Duration], p: f64) -> Duration {
     let mut s = v.to_vec();
     s.sort();
-    s[(((s.len() as f64) * p).ceil() as usize).saturating_sub(1).min(s.len() - 1)]
+    s[(((s.len() as f64) * p).ceil() as usize)
+        .saturating_sub(1)
+        .min(s.len() - 1)]
 }
 
 #[test]
 #[ignore]
 fn inference_floor_by_length() {
     let dir = std::path::PathBuf::from(
-        std::env::var("LLM_D_SC_MODEL_DIR").unwrap_or_else(|_| "artifacts/models/sensitivity".into()),
+        std::env::var("LLM_D_SC_MODEL_DIR")
+            .unwrap_or_else(|_| "artifacts/models/sensitivity".into()),
     );
     let clf = CandleClassifier::from_modelcar(&dir).expect("real model must load");
     let word = "sensitivity classification workload token ";
@@ -28,7 +31,9 @@ fn inference_floor_by_length() {
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::new(),
         };
-        for _ in 0..20 { let _ = clf.classify(inp.clone()); } // warm caches/allocator
+        for _ in 0..20 {
+            let _ = clf.classify(inp.clone());
+        } // warm caches/allocator
         let n = 200;
         let mut lat = Vec::with_capacity(n);
         let t0 = Instant::now();
@@ -41,8 +46,13 @@ fn inference_floor_by_length() {
         let ms = |d: Duration| d.as_secs_f64() * 1000.0;
         println!(
             "  {:>6} | {:>3} | {:>6.2}m | {:>6.2}m | {:>6.2}m | {:>6.2}m | {:>6.2}m | {:>6.0}",
-            target, n, ms(pct(&lat, 0.50)), ms(pct(&lat, 0.90)), ms(pct(&lat, 0.95)),
-            ms(pct(&lat, 0.99)), ms(*lat.iter().max().unwrap()),
+            target,
+            n,
+            ms(pct(&lat, 0.50)),
+            ms(pct(&lat, 0.90)),
+            ms(pct(&lat, 0.95)),
+            ms(pct(&lat, 0.99)),
+            ms(*lat.iter().max().unwrap()),
             n as f64 / wall.as_secs_f64()
         );
     }

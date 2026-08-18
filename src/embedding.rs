@@ -125,14 +125,18 @@ impl Embedder {
         Ok(Embedder { model, tokenizer })
     }
 
-    /// Embed `text`: tokenize, run the model forward, and mean-pool the
-    /// sequence dimension (masked by the attention mask) into the final
-    /// embedding vector.
-    pub fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        let ids = self
-            .tokenizer
+    /// Tokenize `text` into its token-ID sequence. Split out so a caller can
+    /// measure the tokenize stage independently from the model forward (AC-012).
+    pub fn tokenize(&self, text: &str) -> Result<Vec<u32>, EmbeddingError> {
+        self.tokenizer
             .tokenize(text)
-            .map_err(EmbeddingError::Tokenizer)?;
+            .map_err(EmbeddingError::Tokenizer)
+    }
+
+    /// Embed an already-tokenized ID sequence: run the model forward and
+    /// mean-pool the sequence dimension (masked by the attention mask) into the
+    /// final embedding vector.
+    pub fn embed_ids(&self, ids: Vec<u32>) -> Result<Vec<f32>, EmbeddingError> {
         let seq_len = ids.len();
         let device = &self.model.device;
 
@@ -157,6 +161,14 @@ impl Embedder {
             .broadcast_div(&norm.unsqueeze(0).map_err(EmbeddingError::Candle)?)
             .map_err(EmbeddingError::Candle)?;
         normalized.to_vec1::<f32>().map_err(EmbeddingError::Candle)
+    }
+
+    /// Embed `text`: tokenize, run the model forward, and mean-pool the
+    /// sequence dimension (masked by the attention mask) into the final
+    /// embedding vector.
+    pub fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        let ids = self.tokenize(text)?;
+        self.embed_ids(ids)
     }
 }
 

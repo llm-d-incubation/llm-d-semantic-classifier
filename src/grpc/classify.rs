@@ -286,7 +286,10 @@ impl ClassifyServer {
         addr: impl AsRef<str>,
         classifier: crate::classify::CandleClassifier,
     ) -> io::Result<ClassifyServer> {
-        let metrics = Metrics::new();
+        // The server surface shares the classifier's own metrics handle, so the
+        // cache-hit/miss counters and the tokenize/forward stages recorded by the
+        // real Candle forward are visible to a benchmark harness (AC-012).
+        let metrics = classifier.metrics();
         let telemetry = Telemetry::new();
         let service = ClassifyServiceImpl::with_executor(
             classifier,
@@ -366,6 +369,16 @@ impl ClassifyServer {
     /// recorded by every classification the server has served (AC-012).
     pub fn metrics_snapshot(&self) -> MetricsSnapshot {
         self.metrics.snapshot()
+    }
+
+    /// A SHARED handle to the server's metrics registry.
+    ///
+    /// Cloning the handle shares the same counters/accumulators, so a caller
+    /// (e.g. the benchmark runner) can pass it to [`BenchmarkRun::with_metrics`]
+    /// to prove its own methodology and capture the stage decomposition over a
+    /// measured window.
+    pub fn metrics(&self) -> Metrics {
+        self.metrics.clone()
     }
 
     /// A copy of the captured trace events recorded by served classifications.
