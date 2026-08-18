@@ -21,9 +21,19 @@
 
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 
+use crate::classify::ClassifyError;
+use crate::handoff::InferenceExecutor;
 use crate::metrics::{Metrics, MetricsSnapshot};
 use crate::telemetry::{RequestEvent, Telemetry, TraceEvent};
+
+/// Default bound on total admitted (in-flight + queued) inference work.
+///
+/// AC-008 / ADR-0002: the queue is IN the request path, and in-flight + queued
+/// work never exceeds this bound. Generous enough that normal local benchmark
+/// concurrency (P-020 concurrency 1 / P-021 concurrency 4) is never rejected.
+pub const DEFAULT_QUEUE_BOUND: usize = 256;
 
 /// Generated protobuf messages and tonic service/client code (from
 /// `proto/classify.proto`, produced by `build.rs`).
@@ -57,10 +67,27 @@ pub struct ClassifyServer {
 /// tests that must run without weights) or the resident Candle classifier (the
 /// production served path). It returns ranked semantic signals, never a final
 /// route (AC-010).
-#[derive(Clone)]
+///
+/// AC-008 / ADR-0002: the model forward does NOT run on a Tokio network worker.
+/// Every classify request is handed over a BOUNDED handoff to a dedicated
+/// inference executor thread ([`InferenceExecutor`]) that performs the forward
+/// and returns the result via a oneshot. Queue-full admission is rejected
+/// explicitly with tonic `resource_exhausted`; in-flight + queued work never
+/// exceeds the configured bound.
 pub struct ClassifyServiceImpl<R> {
-    service: std::sync::Arc<R>,
     telemetry: Telemetry,
+    executor: Arc<InferenceExecutor<R>>,
+}
+
+impl<R> Clone for ClassifyServiceImpl<R> {
+    /// Clone shares the same telemetry recorder and the SAME dedicated inference
+    /// executor (via [`Arc`]) — cloning never spawns another executor thread.
+    fn clone(&self) -> Self {
+        Self {
+            telemetry: self.telemetry.clone(),
+            executor: self.executor.clone(),
+        }
+    }
 }
 
 impl<R> ClassifyServiceImpl<R>
@@ -68,13 +95,35 @@ where
     R: crate::classify::ClassifierRuntime + Send + Sync + 'static,
 {
     /// Build a classify service backed by the given runtime and telemetry
-    /// recorder (AC-014). The runtime is shared read-only via [`std::sync::Arc`]
-    /// so the tonic service is cheaply cloneable.
+    /// recorder (AC-014), with a dedicated inference executor and the default
+    /// queue bound.
     pub fn new(service: R, telemetry: Telemetry) -> Self {
+        Self::with_executor(service, telemetry, Metrics::new(), DEFAULT_QUEUE_BOUND)
+    }
+
+    /// Build a classify service whose dedicated inference executor records
+    /// queue wait into `metrics` and bounds total admitted (in-flight + queued)
+    /// work to `bound`.
+    ///
+    /// The caller supplies the [`Metrics`] handle so the executor's queue-wait
+    /// recording is the SAME registry the server snapshots (AC-008/AC-012).
+    pub fn with_executor(service: R, telemetry: Telemetry, metrics: Metrics, bound: usize) -> Self {
+        let executor = InferenceExecutor::spawn(service, metrics, bound);
         Self {
-            service: std::sync::Arc::new(service),
             telemetry,
+            executor: Arc::new(executor),
         }
+    }
+
+    /// The configured bound on total admitted (in-flight + queued) work.
+    pub fn queue_bound(&self) -> usize {
+        self.executor.bound()
+    }
+
+    /// The observed maximum total admitted (in-flight + queued) work. AC-008:
+    /// this must never exceed [`ClassifyServiceImpl::queue_bound`].
+    pub fn max_admitted(&self) -> usize {
+        self.executor.max_admitted()
     }
 }
 
@@ -114,14 +163,34 @@ where
             requested_signals: req.signals,
             session_metadata: HashMap::from([("session_id".to_string(), req.session_id)]),
         };
-        // Runtime errors map to an explicit gRPC unavailable status (never a
-        // fabricated label). The served runtime is whichever was bound (the
-        // resident Candle classifier in production, the deterministic synthetic
-        // pipeline in weight-free tests).
-        let result = self
-            .service
-            .classify(input)
-            .map_err(|e| tonic::Status::unavailable(e.to_string()))?;
+        // AC-008 / ADR-0002: hand the job to the dedicated inference executor
+        // over a BOUNDED handoff. The model forward does NOT run on this Tokio
+        // network worker. A full queue rejects admission explicitly with
+        // resource_exhausted (never unboundedly buffered).
+        let respond = self
+            .executor
+            .try_enqueue(input)
+            .map_err(|_| tonic::Status::resource_exhausted("inference queue is full"))?;
+        // Await the dedicated executor's forward result (returned via oneshot).
+        let result = respond
+            .await
+            .map_err(|_| tonic::Status::unavailable("inference executor stopped"))?;
+        // Runtime errors map to an explicit gRPC status (never a fabricated
+        // label). The served runtime is whichever was bound (the resident Candle
+        // classifier in production, the deterministic synthetic pipeline in
+        // weight-free tests). A pipeline-reported resource exhaustion is explicit
+        // resource_exhausted, not a generic unavailable.
+        let result = match result {
+            Err(e) => {
+                return Err(match e {
+                    ClassifyError::ResourceExhausted => {
+                        tonic::Status::resource_exhausted("inference queue is full")
+                    }
+                    _ => tonic::Status::unavailable(e.to_string()),
+                })
+            }
+            Ok(result) => result,
+        };
         // Map the typed result's status onto the wire ClassificationStatus.
         let status = match result.status {
             crate::classify::ClassifyStatus::Ok => generated::ClassificationStatus::Ok,
@@ -163,9 +232,11 @@ impl ClassifyServer {
     pub fn bind(addr: impl AsRef<str>) -> io::Result<ClassifyServer> {
         let metrics = Metrics::new();
         let telemetry = Telemetry::new();
-        let service = ClassifyServiceImpl::new(
+        let service = ClassifyServiceImpl::with_executor(
             crate::classify::ClassifyService::from_synthetic_fixtures_with_metrics(metrics.clone()),
             telemetry.clone(),
+            metrics.clone(),
+            DEFAULT_QUEUE_BOUND,
         );
         Self::serve(
             addr,
@@ -189,9 +260,11 @@ impl ClassifyServer {
         metrics: Metrics,
     ) -> io::Result<ClassifyServer> {
         let telemetry = Telemetry::new();
-        let service = ClassifyServiceImpl::new(
+        let service = ClassifyServiceImpl::with_executor(
             crate::classify::ClassifyService::from_synthetic_fixtures_with_metrics(metrics.clone()),
             telemetry.clone(),
+            metrics.clone(),
+            DEFAULT_QUEUE_BOUND,
         );
         Self::serve(
             addr,
@@ -215,7 +288,12 @@ impl ClassifyServer {
     ) -> io::Result<ClassifyServer> {
         let metrics = Metrics::new();
         let telemetry = Telemetry::new();
-        let service = ClassifyServiceImpl::new(classifier, telemetry.clone());
+        let service = ClassifyServiceImpl::with_executor(
+            classifier,
+            telemetry.clone(),
+            metrics.clone(),
+            DEFAULT_QUEUE_BOUND,
+        );
         Self::serve(
             addr,
             service,

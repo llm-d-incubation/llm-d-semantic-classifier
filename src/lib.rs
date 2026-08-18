@@ -13,6 +13,7 @@ pub mod config;
 pub mod dummy_praxis;
 pub mod embedding;
 pub mod grpc;
+pub mod handoff;
 pub mod metrics;
 pub mod queue;
 pub mod ranker;
