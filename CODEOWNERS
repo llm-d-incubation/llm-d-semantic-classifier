@@ -1,0 +1,9 @@
+# Default owner for everything in this repository.
+* @cnuland
+
+# The wire contract, the specification record, and the architecture decisions
+# change the project's external commitments — always maintainer-reviewed.
+/proto/            @cnuland
+/specs/            @cnuland
+/docs/decisions/   @cnuland
+/SECURITY.md       @cnuland
