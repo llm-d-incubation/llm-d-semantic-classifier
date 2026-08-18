@@ -72,3 +72,12 @@ it. Deadline propagation is I-003, a **0.20** hardening test — the code is cor
 this evidence text was wrong. Also note the served path uses the deterministic synthetic
 pipeline, not `CandleClassifier`; wiring the real runtime is tracked as the integration
 convergence work.
+
+## SUPERSEDED FACTS (convergence slice 1, 2026-08-17)
+The prior whole-criterion summaries (e.g. `GREEN-I001.md`) describe the response as carrying
+"request_id + ranked signals only" with `signals: repeated string` (signal names only). That
+is superseded by Convergence Slice 1: `ClassifyResponse` now carries `classifier_id`,
+`model_revision`, `tokenizer_revision`, `taxonomy_revision`, a `ClassificationStatus`, and
+`repeated RankedSignal ranked` (each with `label` + `score`). Scores/revisions/status are now
+on the wire; `requested_signals` is validated (U-011). See `CONTRACT-lock.md` in this
+directory.

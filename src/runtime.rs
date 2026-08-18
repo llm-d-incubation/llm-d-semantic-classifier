@@ -10,9 +10,9 @@ use crate::tokenizer::Tokenizer;
 /// Required resident ModelCar files relative to the model directory, as
 /// declared by `tests/fixtures/modelcar/classifier-manifest.json`. Warmup must
 /// verify these are present so the runtime starts solely from `/models` with no
-/// runtime Hugging Face fetch.
-#[cfg(test)]
-const MODELCAR_REQUIRED_FILES: &[&str] = &[
+/// runtime Hugging Face fetch. This is production-visible so the served binary
+/// can validate the ModelCar layout before loading (AC-002/AC-003).
+pub const MODELCAR_REQUIRED_FILES: &[&str] = &[
     "model.safetensors",
     "tokenizer.json",
     "1_Pooling/config.json",

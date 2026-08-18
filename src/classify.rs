@@ -41,6 +41,12 @@ const TAXONOMY_REVISION: &str = "synthetic-prototypes";
 /// Embedding dimension of the synthetic prototypes (fixture `dim: 384`).
 const SYNTHETIC_DIM: usize = 384;
 
+/// Fixture input used to WARM the resident classifier before reporting READY.
+/// Running a real forward on this input proves the model/tokenizer are loaded
+/// and warmed, so readiness is not claimed for a directory that merely exists
+/// (AC-002).
+pub const WARMUP_INPUT: &str = "this is a golden sensitivity input";
+
 /// A classification request.
 ///
 /// `text` is the supplied context to classify. `requested_signals` lists the
@@ -195,6 +201,45 @@ impl ClassifierRuntime for CandleClassifier {
             ranked,
         })
     }
+}
+
+/// Load and warm the resident Candle classifier from a ModelCar directory.
+///
+/// AC-002/AC-003: a model directory that merely exists must NOT produce READY.
+/// This performs the full load/warmup sequence and returns an actionable typed
+/// error on ANY failure:
+///
+/// 1. validate the ModelCar layout via the existing required-files check
+///    (`Runtime::warmup_modelcar`);
+/// 2. load tokenizer + bert config + safetensors and build the
+///    [`CandleClassifier`];
+/// 3. run a WARMUP FORWARD on a fixture input to prove readiness.
+///
+/// Only a fully warmed classifier is returned; any failure leaves the service
+/// NOT ready.
+pub fn load_and_warm_modelcar<P: AsRef<std::path::Path>>(
+    model_dir: P,
+) -> Result<CandleClassifier, ClassifyError> {
+    let model_dir = model_dir.as_ref();
+    // (1) ModelCar required-files layout check (AC-003): a dir that merely
+    // exists but lacks the resident weights/tokenizer/pooling config is rejected
+    // before any load.
+    let mut runtime = crate::runtime::Runtime::new();
+    runtime
+        .warmup_modelcar(model_dir, crate::runtime::MODELCAR_REQUIRED_FILES)
+        .map_err(ClassifyError::Unavailable)?;
+    // (2) Load tokenizer + config + safetensors and build the real classifier.
+    let classifier = CandleClassifier::from_modelcar(model_dir)?;
+    // (3) Warmup forward on a fixture input; a runtime error leaves not-ready.
+    let warmup_input = ClassificationInput {
+        text: WARMUP_INPUT.to_string(),
+        requested_signals: vec!["sensitivity".to_string()],
+        session_metadata: HashMap::new(),
+    };
+    classifier
+        .classify(warmup_input)
+        .map_err(|e| ClassifyError::Unavailable(format!("warmup forward failed: {e}")))?;
+    Ok(classifier)
 }
 
 /// Deterministic classification pipeline (no model forward).
@@ -471,5 +516,23 @@ mod tests {
             !result.ranked.is_empty(),
             "candle path must return ranked semantic signals"
         );
+    }
+
+    /// AC-002/AC-003: a model directory that exists but is missing the required
+    /// ModelCar files must NOT become READY. `load_and_warm_modelcar` must fail
+    /// with an actionable typed error (never a ready classifier). This runs
+    /// WITHOUT weights because the required-files check precedes any load.
+    #[test]
+    fn missing_required_files_leaves_not_ready() {
+        let dir = std::env::temp_dir().join("llm-d-sc-realserve-missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Intentionally write NO required ModelCar files.
+        match load_and_warm_modelcar(&dir) {
+            Err(ClassifyError::Unavailable(_)) => {}
+            Ok(_) => panic!("a dir missing required files must leave not-ready"),
+            Err(other) => panic!("must be an actionable unavailable error, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

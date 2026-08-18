@@ -96,7 +96,11 @@ fn i080_latency_decomposition_metrics_visible() {
             signals: vec!["sensitivity".to_string()],
         })
         .expect("cache-miss classify must succeed");
-    assert!(!miss.signals.is_empty(), "miss must return ranked signals");
+    assert!(!miss.ranked.is_empty(), "miss must return ranked signals");
+    assert!(
+        miss.status == llm_d_sc::grpc::classify::generated::ClassificationStatus::Ok as i32,
+        "cache-miss classify must return status OK"
+    );
 
     // A cache hit: the same context is served without tokenize/forward.
     let hit = client
@@ -107,7 +111,11 @@ fn i080_latency_decomposition_metrics_visible() {
             signals: vec!["sensitivity".to_string()],
         })
         .expect("cache-hit classify must succeed");
-    assert!(!hit.signals.is_empty(), "hit must return ranked signals");
+    assert!(!hit.ranked.is_empty(), "hit must return ranked signals");
+    assert!(
+        hit.status == llm_d_sc::grpc::classify::generated::ClassificationStatus::Ok as i32,
+        "cache-hit classify must return status OK"
+    );
 
     // The server's metrics expose the latency decomposition: all four stages
     // and the cache hit/miss counters are visible.

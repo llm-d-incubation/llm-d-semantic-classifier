@@ -22,7 +22,6 @@
 use std::collections::HashMap;
 use std::io;
 
-use crate::classify::ClassifierRuntime;
 use crate::metrics::{Metrics, MetricsSnapshot};
 use crate::telemetry::{RequestEvent, Telemetry, TraceEvent};
 
@@ -49,29 +48,41 @@ pub struct ClassifyServer {
     addr: std::net::SocketAddr,
     metrics: Metrics,
     telemetry: Telemetry,
+    readiness: crate::runtime::Readiness,
 }
 
-/// The pipeline-backed tonic classify service.
+/// The runtime-backed tonic classify service.
 ///
-/// Runs the deterministic classification pipeline (tokenizer -> versioned cache
-/// -> single-flight -> ranker over synthetic prototypes) and returns ranked
-/// semantic signals, never a final route (AC-010).
+/// Serves ANY [`ClassifierRuntime`] — the deterministic synthetic pipeline (for
+/// tests that must run without weights) or the resident Candle classifier (the
+/// production served path). It returns ranked semantic signals, never a final
+/// route (AC-010).
 #[derive(Clone)]
-pub struct ClassifyServiceImpl {
-    service: crate::classify::ClassifyService,
+pub struct ClassifyServiceImpl<R> {
+    service: std::sync::Arc<R>,
     telemetry: Telemetry,
 }
 
-impl ClassifyServiceImpl {
-    /// Build a classify service backed by the given pipeline and telemetry
-    /// recorder (AC-014).
-    pub fn new(service: crate::classify::ClassifyService, telemetry: Telemetry) -> Self {
-        Self { service, telemetry }
+impl<R> ClassifyServiceImpl<R>
+where
+    R: crate::classify::ClassifierRuntime + Send + Sync + 'static,
+{
+    /// Build a classify service backed by the given runtime and telemetry
+    /// recorder (AC-014). The runtime is shared read-only via [`std::sync::Arc`]
+    /// so the tonic service is cheaply cloneable.
+    pub fn new(service: R, telemetry: Telemetry) -> Self {
+        Self {
+            service: std::sync::Arc::new(service),
+            telemetry,
+        }
     }
 }
 
 #[tonic::async_trait]
-impl generated::classify_server::Classify for ClassifyServiceImpl {
+impl<R> generated::classify_server::Classify for ClassifyServiceImpl<R>
+where
+    R: crate::classify::ClassifierRuntime + Send + Sync + 'static,
+{
     async fn classify(
         &self,
         request: tonic::Request<generated::ClassifyRequest>,
@@ -85,6 +96,17 @@ impl generated::classify_server::Classify for ClassifyServiceImpl {
             session_id: req.session_id.clone(),
             context: req.context.clone(),
         });
+        // U-011: only the supported 'sensitivity' signal is accepted; any other
+        // requested signal is rejected explicitly with invalid_argument, never
+        // silently ignored.
+        const SUPPORTED_SIGNAL: &str = "sensitivity";
+        for signal in &req.signals {
+            if signal != SUPPORTED_SIGNAL {
+                return Err(tonic::Status::invalid_argument(format!(
+                    "unsupported signal '{signal}'; only '{SUPPORTED_SIGNAL}' is supported"
+                )));
+            }
+        }
         // Build the typed input; session/signals are passthrough metadata, the
         // context is what gets classified. Never a route in the response (AC-010).
         let input = crate::classify::ClassificationInput {
@@ -92,18 +114,40 @@ impl generated::classify_server::Classify for ClassifyServiceImpl {
             requested_signals: req.signals,
             session_metadata: HashMap::from([("session_id".to_string(), req.session_id)]),
         };
-        // Slice-scope: deterministic pipeline, no model forward. Runtime errors
-        // map to an explicit gRPC unavailable status (never a fabricated label).
+        // Runtime errors map to an explicit gRPC unavailable status (never a
+        // fabricated label). The served runtime is whichever was bound (the
+        // resident Candle classifier in production, the deterministic synthetic
+        // pipeline in weight-free tests).
         let result = self
             .service
             .classify(input)
             .map_err(|e| tonic::Status::unavailable(e.to_string()))?;
-        // The response schema carries request_id + ranked signals only; it has
-        // no route field at all (ADR-0001, AC-010), so a route is
+        // Map the typed result's status onto the wire ClassificationStatus.
+        let status = match result.status {
+            crate::classify::ClassifyStatus::Ok => generated::ClassificationStatus::Ok,
+            crate::classify::ClassifyStatus::Abstain => generated::ClassificationStatus::Abstain,
+            crate::classify::ClassifyStatus::Error => generated::ClassificationStatus::Unavailable,
+        };
+        // The response carries request_id, classifier_id, the exact revision
+        // fingerprint fields, the status, and the ranked signals with scores. It
+        // has no route field at all (ADR-0001, AC-010), so a route is
         // unrepresentable on the wire.
+        let ranked = result
+            .ranked
+            .iter()
+            .map(|s| generated::RankedSignal {
+                label: s.id.clone(),
+                score: s.score as f32,
+            })
+            .collect();
         let response = generated::ClassifyResponse {
             request_id: req.request_id,
-            signals: result.ranked.iter().map(|s| s.id.clone()).collect(),
+            classifier_id: result.classifier_id,
+            model_revision: result.model_revision,
+            tokenizer_revision: result.tokenizer_revision,
+            taxonomy_revision: result.taxonomy_revision,
+            status: status as i32,
+            ranked,
         };
         Ok(tonic::Response::new(response))
     }
@@ -112,7 +156,86 @@ impl generated::classify_server::Classify for ClassifyServiceImpl {
 impl ClassifyServer {
     /// Bind a classify server on the given address (`127.0.0.1:0` for an
     /// ephemeral port) and begin serving in the background.
+    ///
+    /// TEST-ONLY synthetic path: serves the deterministic pipeline so tests that
+    /// must run without model weights can exercise the full gRPC contract. The
+    /// production binary uses [`ClassifyServer::bind_with_classifier`] instead.
     pub fn bind(addr: impl AsRef<str>) -> io::Result<ClassifyServer> {
+        let metrics = Metrics::new();
+        let telemetry = Telemetry::new();
+        let service = ClassifyServiceImpl::new(
+            crate::classify::ClassifyService::from_synthetic_fixtures_with_metrics(metrics.clone()),
+            telemetry.clone(),
+        );
+        Self::serve(
+            addr,
+            service,
+            metrics,
+            telemetry,
+            crate::runtime::Readiness::Ready,
+        )
+    }
+
+    /// Bind a classify server that records its latency/cache counters into the
+    /// CALLER-SUPPLIED [`Metrics`] handle.
+    ///
+    /// TEST-ONLY synthetic path (deterministic pipeline, no model forward). The
+    /// benchmark harness shares this same [`Metrics`] clone so it can PROVE its
+    /// own methodology: capturing the service's `cache_hits`/`cache_misses`
+    /// deltas around a measured window and asserting they equal the measured
+    /// request count (see `llm_d_sc::bench`).
+    pub fn bind_with_metrics(
+        addr: impl AsRef<str>,
+        metrics: Metrics,
+    ) -> io::Result<ClassifyServer> {
+        let telemetry = Telemetry::new();
+        let service = ClassifyServiceImpl::new(
+            crate::classify::ClassifyService::from_synthetic_fixtures_with_metrics(metrics.clone()),
+            telemetry.clone(),
+        );
+        Self::serve(
+            addr,
+            service,
+            metrics,
+            telemetry,
+            crate::runtime::Readiness::Ready,
+        )
+    }
+
+    /// Bind a classify server serving the RESIDENT Candle classifier.
+    ///
+    /// Production served path (AC-002/AC-003): the classifier must already be
+    /// loaded AND warmed (via [`crate::classify::load_and_warm_modelcar`]) —
+    /// a directory that merely exists never reaches here because warmup fails
+    /// first. The server therefore reports READY. It begins serving in the
+    /// background and returns on an ephemeral port when given `:0`.
+    pub fn bind_with_classifier(
+        addr: impl AsRef<str>,
+        classifier: crate::classify::CandleClassifier,
+    ) -> io::Result<ClassifyServer> {
+        let metrics = Metrics::new();
+        let telemetry = Telemetry::new();
+        let service = ClassifyServiceImpl::new(classifier, telemetry.clone());
+        Self::serve(
+            addr,
+            service,
+            metrics,
+            telemetry,
+            crate::runtime::Readiness::Ready,
+        )
+    }
+
+    /// Bind and serve any tonic classify service on a private Tokio runtime.
+    fn serve<R>(
+        addr: impl AsRef<str>,
+        service: ClassifyServiceImpl<R>,
+        metrics: Metrics,
+        telemetry: Telemetry,
+        readiness: crate::runtime::Readiness,
+    ) -> io::Result<ClassifyServer>
+    where
+        R: crate::classify::ClassifierRuntime + Send + Sync + 'static,
+    {
         let addr_str = addr.as_ref();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -127,12 +250,7 @@ impl ClassifyServer {
             .map_err(io::Error::other)?;
         let bound = listener.local_addr()?;
 
-        let metrics = Metrics::new();
-        let telemetry = Telemetry::new();
-        let service = generated::classify_server::ClassifyServer::new(ClassifyServiceImpl::new(
-            crate::classify::ClassifyService::from_synthetic_fixtures_with_metrics(metrics.clone()),
-            telemetry.clone(),
-        ));
+        let service = generated::classify_server::ClassifyServer::new(service);
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
         let serve = tonic::transport::Server::builder()
             .add_service(service)
@@ -145,7 +263,17 @@ impl ClassifyServer {
             addr: bound,
             metrics,
             telemetry,
+            readiness,
         })
+    }
+
+    /// Current readiness.
+    ///
+    /// A successfully bound server reports READY; a real model dir that fails
+    /// load/warmup never constructs a server, so readiness is never claimed for
+    /// a directory that merely exists (AC-002).
+    pub fn readiness(&self) -> crate::runtime::Readiness {
+        self.readiness
     }
 
     /// The actual bound address (resolved after an ephemeral `:0` bind).

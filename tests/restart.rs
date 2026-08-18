@@ -47,8 +47,16 @@ fn i045_restart_full_context_recomputes_correctly() {
         .classify(full_context_request())
         .expect("pre-restart classify must succeed");
     assert!(
-        !before.signals.is_empty(),
+        !before.ranked.is_empty(),
         "full context must produce ranked signals, not abstain"
+    );
+    assert!(
+        before.status == llm_d_sc::grpc::classify::generated::ClassificationStatus::Ok as i32,
+        "full context must return status OK"
+    );
+    assert!(
+        !before.model_revision.is_empty() && !before.taxonomy_revision.is_empty(),
+        "full context must carry the revision fingerprint fields"
     );
     // The pre-restart server ran exactly one forward (one cache miss).
     let pre_snap = server_a.metrics_snapshot();
@@ -81,7 +89,7 @@ fn i045_restart_full_context_recomputes_correctly() {
     // The full-context recomputation must be equivalent to the pre-restart
     // result (deterministic pipeline, same ranked signals).
     assert_eq!(
-        before.signals, after.signals,
+        before.ranked, after.ranked,
         "AC-013: restart + complete context must recompute an equivalent result"
     );
 }

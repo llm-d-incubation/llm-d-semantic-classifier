@@ -32,22 +32,44 @@ fn classify_response_block(source: &str) -> &str {
     &source[start..start + brace]
 }
 
-/// U-010: the `ClassifyResponse` schema carries only request_id + signals, and
-/// no route/endpoint/target field anywhere in the message (ADR-0001).
+/// U-010: the `ClassifyResponse` schema carries request_id, classifier_id, the
+/// revision fingerprint fields, status, and ranked signals — and no
+/// route/endpoint/target field anywhere in the message (ADR-0001).
 #[test]
 fn u010_response_schema_has_no_route_field() {
     let source = std::fs::read_to_string(proto_root())
         .expect("committed proto/classify.proto must be readable");
     let block = classify_response_block(&source);
 
-    // The response must still carry request_id and the ranked signals.
+    // The response must carry request_id and the ranked signals.
     assert!(
         block.contains("request_id"),
         "ClassifyResponse must retain request_id"
     );
     assert!(
-        block.contains("signals"),
+        block.contains("ranked"),
         "ClassifyResponse must retain ranked signals"
+    );
+    // The richer contract: classifier id, revision fingerprint, and status.
+    assert!(
+        block.contains("classifier_id"),
+        "ClassifyResponse must carry classifier_id"
+    );
+    assert!(
+        block.contains("model_revision"),
+        "ClassifyResponse must carry model_revision"
+    );
+    assert!(
+        block.contains("tokenizer_revision"),
+        "ClassifyResponse must carry tokenizer_revision"
+    );
+    assert!(
+        block.contains("taxonomy_revision"),
+        "ClassifyResponse must carry taxonomy_revision"
+    );
+    assert!(
+        block.contains("status"),
+        "ClassifyResponse must carry ClassificationStatus"
     );
 
     // Parse the actual field declarations (`<type> <name> = <num>;`) and

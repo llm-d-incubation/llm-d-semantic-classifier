@@ -78,17 +78,48 @@ async fn i001_real_tonic_round_trip() {
         .expect("classify round trip must succeed")
         .into_inner();
 
-    // The response must carry ranked semantic signals over the wire...
+    // The response must carry ranked semantic signals over the wire, each with
+    // a score present...
     assert!(
-        !response.signals.is_empty(),
+        !response.ranked.is_empty(),
         "response must carry ranked semantic signals"
+    );
+    for signal in &response.ranked {
+        assert!(
+            !signal.label.is_empty(),
+            "every ranked signal must carry a label"
+        );
+        assert!(
+            signal.score.is_finite(),
+            "every ranked signal must carry a finite score"
+        );
+    }
+    // ...the versioned classifier/revision fingerprint must be non-empty...
+    assert!(
+        !response.classifier_id.is_empty(),
+        "response must carry classifier_id"
+    );
+    assert!(
+        !response.model_revision.is_empty(),
+        "response must carry model_revision"
+    );
+    assert!(
+        !response.tokenizer_revision.is_empty(),
+        "response must carry tokenizer_revision"
+    );
+    assert!(
+        !response.taxonomy_revision.is_empty(),
+        "response must carry taxonomy_revision"
+    );
+    // ...and the deterministic pipeline must return a real Ok result.
+    assert_eq!(
+        response.status,
+        generated::ClassificationStatus::Ok as i32,
+        "a successful classification must carry status OK"
     );
     // ...and carry no final route at all. AC-010 is now a SCHEMA invariant
     // (U-010): `ClassifyResponse` has no route/endpoint field, so a route is
-    // unrepresentable on the wire (ADR-0001, interpretation (B)). The former
-    // `final_route.is_none()` assertion is superseded by that deterministic
-    // schema test (`tests/schema.rs`).
-    let _ = response;
+    // unrepresentable on the wire (ADR-0001, interpretation (B)).
 
     // Tear down the server task (the channel is persistent; abort releases it).
     server.abort();
@@ -114,8 +145,16 @@ fn i002_persistent_http2_channel_reused() {
             .classify(fixture_request(&format!("req-{turn:04}"), "sess-0002"))
             .expect("every turn must succeed over the persistent channel");
         assert!(
-            !response.signals.is_empty(),
+            !response.ranked.is_empty(),
             "turn {turn} must return ranked signals"
+        );
+        assert!(
+            !response.ranked[0].label.is_empty(),
+            "turn {turn} must return a labeled signal"
+        );
+        assert!(
+            response.ranked[0].score.is_finite(),
+            "turn {turn} must return a finite score"
         );
     }
 
@@ -123,6 +162,43 @@ fn i002_persistent_http2_channel_reused() {
         client.channel_reconnect_count(),
         0,
         "I-008: multi-turn requests must not reconnect per call"
+    );
+}
+
+/// U-011 (AC-009): unknown signal explicit error.
+///
+/// The request's `requested_signals` must be validated: only the supported
+/// `sensitivity` signal is accepted; any other requested signal is rejected with
+/// an explicit tonic `invalid_argument` status (never silently ignored). A
+/// supported signal still returns a real Ok result.
+#[test]
+fn u011_unknown_signal_explicit_error() {
+    use llm_d_sc::grpc::classify::{ClassifyClient, ClassifyServer};
+
+    let server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
+    let addr = server.local_addr();
+    let mut client = ClassifyClient::connect(addr).expect("client must connect");
+
+    // A supported signal is accepted and returns a real Ok result.
+    let ok = client
+        .classify(fixture_request("req-011-ok", "sess-011"))
+        .expect("sensitivity must be accepted");
+    assert_eq!(
+        ok.status,
+        generated::ClassificationStatus::Ok as i32,
+        "the supported sensitivity signal must return status OK"
+    );
+
+    // An unknown signal is rejected explicitly with invalid_argument.
+    let mut bad = fixture_request("req-011-bad", "sess-011");
+    bad.signals = vec!["pii".to_string()];
+    let err = client
+        .classify(bad)
+        .expect_err("unknown signal must be rejected explicitly");
+    assert_eq!(
+        err.code(),
+        tonic::Code::InvalidArgument,
+        "an unknown signal must map to an explicit invalid_argument error"
     );
 }
 

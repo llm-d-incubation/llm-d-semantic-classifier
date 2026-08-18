@@ -90,7 +90,11 @@ impl DummyPraxis {
         let rtt = start.elapsed();
 
         // Consume the top ranked semantic signal (never a final route: AC-010).
-        let signal = resp.signals.first().cloned().unwrap_or_default();
+        let signal = resp
+            .ranked
+            .first()
+            .map(|s| s.label.clone())
+            .unwrap_or_default();
 
         // Routing authority stays Praxis: apply the dummy's fixed test-only
         // mapping, never a route dictated by llm-d-sc.

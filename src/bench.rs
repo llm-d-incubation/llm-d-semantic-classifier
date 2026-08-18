@@ -15,11 +15,41 @@
 //! selects a cache-hit (warmed exact-result cache) or cache-miss (unique context
 //! per request) workload. Routing/session authority stays with the dummy Praxis
 //! (AC-010); this module only measures RTT, never a route.
+//!
+//! # Methodology (this slice)
+//!
+//! The cache-mode workloads are keyed by a distinct, PER-RUN NAMESPACE so that a
+//! measured request can never be silently served from the cache when it is meant
+//! to be a miss, and vice-versa:
+//!
+//! - [`CacheMode::Miss`]: warmup keys live in the `warm-{i}` namespace, which is
+//!   NEVER measured, and measured keys live in the `measure-{run_id}-{i}`
+//!   namespace, which is NEVER pre-warmed. Every measured request is therefore a
+//!   genuine cache miss.
+//! - [`CacheMode::Hit`]: warmup deliberately pre-warms EXACTLY the measured keys
+//!   (`measure-{run_id}-{i}`), so every measured request is a genuine cache hit
+//!   (the caller must warm at least as many keys as it measures).
+//!
+//! `run_id` is unique per [`BenchmarkRun`], so two runs never share measured
+//! keys even with identical warmup/measure counts.
+//!
+//! When a [`Metrics`] handle is supplied (the same one the server records into),
+//! the harness PROVES ITS OWN METHODOLOGY: it snapshots the service's
+//! `cache_hits`/`cache_misses` deltas around the measured window and asserts
+//! `miss-mode delta_misses == measured_count` and `hit-mode delta_hits ==
+//! measured_count` (with the opposite counter at zero). A future refactor that
+//! silently collides warmup and measured keys fails the harness's own assertion
+//! instead of producing invalid numbers.
 
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::dummy_praxis::{DummyPraxis, DummyRequest};
+use crate::metrics::{Metrics, MetricsSnapshot};
+
+/// Unique-per-run counter so two benchmark runs never share measured keys.
+static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(0);
 
 /// The network topology under test. Both connect over the persistent gRPC
 /// channel to the supplied address; the variant is recorded so the captured
@@ -36,9 +66,10 @@ pub enum Topology {
 /// The cache workload to measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheMode {
-    /// Exact-result cache hit: the same context is classified repeatedly.
+    /// Exact-result cache hit: the measured keys are pre-warmed so the cache hits.
     Hit,
-    /// Cache miss: every request carries a unique context, so the cache never hits.
+    /// Cache miss: every measured request carries a unique, never-pre-warmed
+    /// key, so the cache never hits.
     Miss,
 }
 
@@ -94,43 +125,141 @@ fn percentile(sorted: &[std::time::Duration], p: u64) -> std::time::Duration {
     sorted[idx]
 }
 
+/// The measured-key context for index `index` under `run_id`.
+///
+/// Lives in the per-run `measure-{run_id}-{i}` namespace, which is NEVER
+/// pre-warmed in [`CacheMode::Miss`] and EXACTLY pre-warmed in
+/// [`CacheMode::Hit`]. Distinct per run and per index, so a measured request is
+/// never a silent cache hit when it should be a miss.
+fn measure_context(run_id: u64, index: u64) -> String {
+    format!("measure-{run_id}-{index}")
+}
+
+/// The warmup-key context for index `index` under `run_id`.
+///
+/// - [`CacheMode::Miss`]: `warm-{index}` — a namespace disjoint from the
+///   measured keys, so measured miss keys are never pre-warmed.
+/// - [`CacheMode::Hit`]: EXACTLY the measured key, so a cache-hit workload's
+///   measured requests genuinely hit.
+fn warmup_context(cache_mode: CacheMode, run_id: u64, index: u64) -> String {
+    match cache_mode {
+        CacheMode::Hit => measure_context(run_id, index),
+        CacheMode::Miss => format!("warm-{index}"),
+    }
+}
+
+/// Verify the harness's OWN methodology from the cache counters captured around
+/// a measured window.
+///
+/// Miss-mode: every measured request must be a genuine miss, so
+/// `delta_misses == measured` and `delta_hits == 0`. Hit-mode: every measured
+/// request must be a genuine hit, so `delta_hits == measured` and
+/// `delta_misses == 0`. A violation (e.g. warmup/measured key collision after a
+/// refactor) returns a [`BenchError::Methodology`] instead of silently producing
+/// invalid benchmark numbers.
+fn verify_window(
+    cache_mode: CacheMode,
+    before: MetricsSnapshot,
+    after: MetricsSnapshot,
+    measured: u64,
+) -> Result<(), BenchError> {
+    let delta_hits = after.cache_hits.saturating_sub(before.cache_hits);
+    let delta_misses = after.cache_misses.saturating_sub(before.cache_misses);
+    match cache_mode {
+        CacheMode::Miss => {
+            if delta_misses != measured {
+                return Err(BenchError::Methodology(format!(
+                    "miss-mode methodology violation: expected {measured} cache misses in the measured window, observed delta_misses={delta_misses}; measured keys must never be pre-warmed"
+                )));
+            }
+            if delta_hits != 0 {
+                return Err(BenchError::Methodology(format!(
+                    "miss-mode methodology violation: expected 0 cache hits in the measured window, observed delta_hits={delta_hits}"
+                )));
+            }
+        }
+        CacheMode::Hit => {
+            if delta_hits != measured {
+                return Err(BenchError::Methodology(format!(
+                    "hit-mode methodology violation: expected {measured} cache hits in the measured window, observed delta_hits={delta_hits}; measured keys must be pre-warmed"
+                )));
+            }
+            if delta_misses != 0 {
+                return Err(BenchError::Methodology(format!(
+                    "hit-mode methodology violation: expected 0 cache misses in the measured window, observed delta_misses={delta_misses}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A benchmark run over the persistent gRPC channel for a topology/cache-mode.
 ///
 /// Connects the dummy Praxis once (persistent channel, I-008: no reconnect per
 /// call), warms the requested cache mode, then measures a workload of
-/// per-request RTTs and reduces them to a percentile distribution.
+/// per-request RTTs and reduces them to a percentile distribution. When a
+/// [`Metrics`] handle is supplied it also PROVES its own methodology (see the
+/// module docs). Serial measurement uses the shared [`Mutex`]`<DummyPraxis>`;
+/// [`BenchmarkRun::measure_concurrent`] uses one per-worker client per worker
+/// thread over the persistent channel.
 pub struct BenchmarkRun {
+    addr: String,
     praxis: Mutex<DummyPraxis>,
     cache_mode: CacheMode,
-    /// The fixed context reused for cache-hit workloads (same exact-result key).
-    hit_context: String,
+    run_id: u64,
+    metrics: Option<Metrics>,
 }
 
 impl BenchmarkRun {
     /// Connect the dummy Praxis to `addr` and configure a topology/cache-mode.
+    ///
+    /// No methodology self-check is performed (no shared [`Metrics`] handle).
+    /// Prefer [`BenchmarkRun::with_metrics`] when a server's counters are
+    /// available so the harness proves its own methodology.
     pub fn new(
+        addr: impl AsRef<str>,
+        topology: Topology,
+        cache_mode: CacheMode,
+    ) -> io::Result<Self> {
+        Self::connect(addr, topology, cache_mode, None)
+    }
+
+    /// Connect and share the server's [`Metrics`] handle so the harness can
+    /// PROVE its own methodology (cache-hit/miss deltas over the measured window).
+    pub fn with_metrics(
+        addr: impl AsRef<str>,
+        topology: Topology,
+        cache_mode: CacheMode,
+        metrics: Metrics,
+    ) -> io::Result<Self> {
+        Self::connect(addr, topology, cache_mode, Some(metrics))
+    }
+
+    fn connect(
         addr: impl AsRef<str>,
         _topology: Topology,
         cache_mode: CacheMode,
+        metrics: Option<Metrics>,
     ) -> io::Result<Self> {
-        let praxis = DummyPraxis::connect(addr)?;
+        let addr = addr.as_ref().to_string();
+        let praxis = DummyPraxis::connect(&addr)?;
         Ok(BenchmarkRun {
+            addr,
             praxis: Mutex::new(praxis),
             cache_mode,
-            hit_context: "benchmark golden sensitivity input".to_string(),
+            run_id: NEXT_RUN_ID.fetch_add(1, Ordering::SeqCst),
+            metrics,
         })
     }
 
-    /// Send one classify-and-route turn and return its measured RTT.
-    fn send_one(&self, index: u64) -> Result<std::time::Duration, tonic::Status> {
-        let context = match self.cache_mode {
-            CacheMode::Hit => self.hit_context.clone(),
-            CacheMode::Miss => format!("unique sensitivity context {index} with distinct tokens"),
-        };
+    /// Send one classify-and-route turn with an explicit context and return its
+    /// measured RTT, over the shared serial dummy-Praxis client.
+    fn send_one(&self, context: &str, index: u64) -> Result<std::time::Duration, tonic::Status> {
         let req = DummyRequest {
             request_id: format!("bench-{index}"),
             session_id: format!("bench-session-{}", index % 4),
-            context,
+            context: context.to_string(),
             signals: vec!["sensitivity".to_string()],
             deadline: None,
         };
@@ -139,34 +268,150 @@ impl BenchmarkRun {
     }
 
     /// Warm up the requested cache mode with `n` requests (results discarded).
+    ///
+    /// - [`CacheMode::Miss`]: warms the disjoint `warm-{i}` namespace so measured
+    ///   miss keys are never pre-warmed.
+    /// - [`CacheMode::Hit`]: deliberately pre-warms EXACTLY the measured keys
+    ///   (`measure-{run_id}-{i}`), so a later measurement genuinely hits.
     pub fn warmup(&self, n: u64) -> Result<(), BenchError> {
         for i in 0..n {
-            self.send_one(i).map_err(BenchError::Request)?;
+            let context = warmup_context(self.cache_mode, self.run_id, i);
+            self.send_one(&context, i).map_err(BenchError::Request)?;
         }
         Ok(())
     }
 
-    /// Measure `n` requests and reduce their per-request RTTs to a distribution.
+    /// Measure `n` requests (per-run `measure-{run_id}-{i}` keys) and reduce
+    /// their per-request RTTs to a distribution.
+    ///
+    /// With a shared [`Metrics`] handle, PROVES the methodology: snapshots the
+    /// service's cache-hit/miss counters before and after the window and asserts
+    /// the expected deltas (miss-mode `delta_misses == n`; hit-mode
+    /// `delta_hits == n`). A violation returns a [`BenchError::Methodology`].
     pub fn measure(&self, n: u64) -> Result<RttDistribution, BenchError> {
+        let before = self.metrics.as_ref().map(|m| m.snapshot());
         let mut samples = Vec::with_capacity(n as usize);
         for i in 0..n {
-            samples.push(self.send_one(i).map_err(BenchError::Request)?);
+            samples.push(
+                self.send_one(&measure_context(self.run_id, i), i)
+                    .map_err(BenchError::Request)?,
+            );
         }
+        self.assert_methodology(before, n)?;
         Ok(RttDistribution::from_samples(samples))
+    }
+
+    /// Measure `n` requests under `concurrency` concurrent workers, each with its
+    /// OWN dummy-Praxis client over the persistent channel, and reduce their RTTs
+    /// to the same percentile distribution.
+    ///
+    /// The `Mutex<DummyPraxis>` serial loop cannot overlap requests, so this uses
+    /// one per-worker client per worker thread (P-020 concurrency 1 / P-021
+    /// concurrency 4). Keys are the per-run `measure-{run_id}-{i}` namespace,
+    /// exactly as [`BenchmarkRun::measure`], and the same methodology self-check
+    /// is applied.
+    pub fn measure_concurrent(
+        &self,
+        n: u64,
+        concurrency: u64,
+    ) -> Result<RttDistribution, BenchError> {
+        let before = self.metrics.as_ref().map(|m| m.snapshot());
+        let samples = self.run_concurrent(n, concurrency)?;
+        self.assert_methodology(before, n)?;
+        Ok(RttDistribution::from_samples(samples))
+    }
+
+    /// Assert the methodology by comparing cache-hit/miss deltas over the window.
+    fn assert_methodology(
+        &self,
+        before: Option<MetricsSnapshot>,
+        measured: u64,
+    ) -> Result<(), BenchError> {
+        let Some(metrics) = &self.metrics else {
+            return Ok(());
+        };
+        let before = before.ok_or_else(|| {
+            BenchError::Methodology("no baseline metrics snapshot captured".to_string())
+        })?;
+        verify_window(self.cache_mode, before, metrics.snapshot(), measured)
+    }
+
+    /// Distribute `n` requests across `concurrency` worker threads, each with a
+    /// fresh per-worker dummy-Praxis client over the persistent channel, and
+    /// collect every measured RTT.
+    fn run_concurrent(
+        &self,
+        n: u64,
+        concurrency: u64,
+    ) -> Result<Vec<std::time::Duration>, BenchError> {
+        let workers = concurrency.max(1);
+        let addr = self.addr.clone();
+        let run_id = self.run_id;
+        let cache_mode = self.cache_mode;
+        let mut handles = Vec::with_capacity(workers as usize);
+        let base = n / workers;
+        let extra = n % workers;
+        let mut start = 0u64;
+        for w in 0..workers {
+            let count = base + if w < extra { 1 } else { 0 };
+            let end = start + count;
+            let addr = addr.clone();
+            handles.push(std::thread::spawn(move || -> Result<Vec<_>, BenchError> {
+                // Per-worker client over the persistent channel (I-008).
+                let mut praxis = DummyPraxis::connect(addr).map_err(BenchError::Io)?;
+                let mut samples = Vec::with_capacity(count as usize);
+                for i in start..end {
+                    let context = match cache_mode {
+                        CacheMode::Hit => measure_context(run_id, i),
+                        CacheMode::Miss => measure_context(run_id, i),
+                    };
+                    let req = DummyRequest {
+                        request_id: format!("bench-concurrent-{i}"),
+                        session_id: format!("bench-session-{}", i % 4),
+                        context,
+                        signals: vec!["sensitivity".to_string()],
+                        deadline: None,
+                    };
+                    let outcome = praxis
+                        .classify_and_route(req)
+                        .map_err(BenchError::Request)?;
+                    samples.push(outcome.rtt);
+                }
+                Ok(samples)
+            }));
+            start = end;
+        }
+        let mut samples = Vec::new();
+        for handle in handles {
+            let worker = handle.join().map_err(|_| BenchError::Thread)?;
+            samples.extend(worker?);
+        }
+        Ok(samples)
     }
 }
 
-/// A benchmark failure: a request could not be completed over the channel.
+/// A benchmark failure: a request could not be completed, the methodology
+/// self-check failed, or a worker thread panicked.
 #[derive(Debug)]
 pub enum BenchError {
     /// A classify request failed over the gRPC channel.
     Request(tonic::Status),
+    /// A per-worker dummy-Praxis client could not connect.
+    Io(std::io::Error),
+    /// A concurrent worker thread panicked.
+    Thread,
+    /// The harness's OWN methodology self-check failed (e.g. a measured miss key
+    /// was pre-warmed, or a measured hit key was not).
+    Methodology(String),
 }
 
 impl std::fmt::Display for BenchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BenchError::Request(s) => write!(f, "benchmark request failed: {s}"),
+            BenchError::Io(e) => write!(f, "benchmark worker connect failed: {e}"),
+            BenchError::Thread => write!(f, "benchmark worker thread panicked"),
+            BenchError::Methodology(m) => write!(f, "benchmark methodology violation: {m}"),
         }
     }
 }
@@ -176,6 +421,7 @@ impl std::error::Error for BenchError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metrics::MetricsSnapshot;
 
     /// The percentile accessors are monotone and the max is at least p99, so a
     /// captured distribution always satisfies the AC-011 invariant that a
@@ -194,5 +440,92 @@ mod tests {
         assert!(dist.p95() <= dist.p99());
         assert!(dist.p99() <= dist.max());
         assert!(dist.p50() > std::time::Duration::ZERO);
+    }
+
+    /// Miss-mode warmup keys (`warm-{i}`) must be DISJOINT from the measured keys
+    /// (`measure-{run_id}-{i}`), so a measured miss request is never a silent hit.
+    #[test]
+    fn miss_warmup_and_measured_keyspaces_are_disjoint() {
+        let run_id = 7;
+        for i in 0..100 {
+            let warm = warmup_context(CacheMode::Miss, run_id, i);
+            let measured = measure_context(run_id, i);
+            assert_ne!(
+                warm, measured,
+                "miss-mode warmup key must never collide with a measured key"
+            );
+            assert!(
+                !measured.starts_with("warm-"),
+                "measured keys must live in the measure namespace"
+            );
+        }
+    }
+
+    /// Hit-mode warmup must pre-warm EXACTLY the measured keys, so a measured hit
+    /// request is a genuine cache hit.
+    #[test]
+    fn hit_warmup_prewarms_exactly_the_measured_keys() {
+        let run_id = 9;
+        for i in 0..100 {
+            assert_eq!(
+                warmup_context(CacheMode::Hit, run_id, i),
+                measure_context(run_id, i),
+                "hit-mode warmup must pre-warm exactly the measured key"
+            );
+        }
+    }
+
+    /// Distinct runs must use distinct measured key namespaces.
+    #[test]
+    fn distinct_runs_use_distinct_measured_namespaces() {
+        for i in 0..10 {
+            assert_ne!(
+                measure_context(1, i),
+                measure_context(2, i),
+                "two runs must not share measured keys"
+            );
+        }
+    }
+
+    /// A snapshot helper: a metrics snapshot with the given cache counters.
+    fn snap(hits: u64, misses: u64) -> MetricsSnapshot {
+        MetricsSnapshot {
+            queue: std::time::Duration::ZERO,
+            tokenize: std::time::Duration::ZERO,
+            forward: std::time::Duration::ZERO,
+            total: std::time::Duration::ZERO,
+            cache_hits: hits,
+            cache_misses: misses,
+        }
+    }
+
+    /// Miss-mode methodology: measured-count misses in the window with zero hits
+    /// PASSES; a pre-warmed measured key (delta_misses != measured) FAILS.
+    #[test]
+    fn miss_methodology_rejects_prewarmed_measured_keys() {
+        // Correct: 1000 misses, 0 hits in the window.
+        verify_window(CacheMode::Miss, snap(0, 0), snap(0, 1000), 1000)
+            .expect("a genuine miss window must pass");
+
+        // Buggy: measured miss keys were pre-warmed -> only 200 misses in a 1000
+        // window (the other 800 were hits). The harness must reject this.
+        let err = verify_window(CacheMode::Miss, snap(0, 0), snap(800, 200), 1000)
+            .expect_err("a miss window whose measured keys were pre-warmed must fail");
+        assert!(err.to_string().contains("miss-mode"));
+    }
+
+    /// Hit-mode methodology: measured-count hits in the window with zero misses
+    /// PASSES; an un-pre-warmed measured key (delta_hits != measured) FAILS.
+    #[test]
+    fn hit_methodology_rejects_unprewarmed_measured_keys() {
+        // Correct: 1000 hits, 0 misses in the window.
+        verify_window(CacheMode::Hit, snap(0, 0), snap(1000, 0), 1000)
+            .expect("a genuine hit window must pass");
+
+        // Buggy: only 100 of the measured keys were pre-warmed -> 100 hits and
+        // 900 misses in a 1000 window. The harness must reject this.
+        let err = verify_window(CacheMode::Hit, snap(0, 0), snap(100, 900), 1000)
+            .expect_err("a hit window with un-pre-warmed measured keys must fail");
+        assert!(err.to_string().contains("hit-mode"));
     }
 }
