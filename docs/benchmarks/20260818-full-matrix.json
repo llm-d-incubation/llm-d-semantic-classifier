@@ -1,0 +1,383 @@
+{
+  "manifest": {
+    "git_sha": "2f1c66e8e1a69e1376b7d71f7a631bd66e8d02fa",
+    "model_dir": "artifacts/models/sensitivity",
+    "model_revision": "43f21d21ac48134464f8510a9ac9c95bdac7ba86",
+    "tokenizer_revision": "43f21d21ac48134464f8510a9ac9c95bdac7ba86",
+    "backend": "candle",
+    "topology": "loopback",
+    "cpu_model": "Apple M4 Max",
+    "warmup_requests": 100,
+    "measured_requests": 300
+  },
+  "scenarios": [
+    {
+      "cache_mode": "hit",
+      "sequence_length": 32,
+      "actual_token_count": 38,
+      "concurrency": 1,
+      "warmup_requests": 300,
+      "measured_requests": 300,
+      "throughput_req_per_s": 11204.272562603872,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 0.089625,
+        "p90": 0.095083,
+        "p95": 0.100542,
+        "p99": 0.106333,
+        "max": 0.109958
+      },
+      "stages_ms": {
+        "queue": 1.1665480000000001,
+        "tokenize": 0.0,
+        "forward": 0.0,
+        "total": 0.260882
+      }
+    },
+    {
+      "cache_mode": "hit",
+      "sequence_length": 32,
+      "actual_token_count": 38,
+      "concurrency": 4,
+      "warmup_requests": 300,
+      "measured_requests": 300,
+      "throughput_req_per_s": 32706.313332368863,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 0.10124999999999999,
+        "p90": 0.122708,
+        "p95": 0.129,
+        "p99": 0.21179099999999998,
+        "max": 0.220209
+      },
+      "stages_ms": {
+        "queue": 2.213667,
+        "tokenize": 0.0,
+        "forward": 0.0,
+        "total": 0.375129
+      }
+    },
+    {
+      "cache_mode": "miss",
+      "sequence_length": 32,
+      "actual_token_count": 38,
+      "concurrency": 1,
+      "warmup_requests": 100,
+      "measured_requests": 300,
+      "throughput_req_per_s": 83.35324647022243,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 11.811459,
+        "p90": 12.7195,
+        "p95": 13.545708,
+        "p99": 14.367458,
+        "max": 27.624
+      },
+      "stages_ms": {
+        "queue": 1.812455,
+        "tokenize": 11.15158,
+        "forward": 3541.6100840000004,
+        "total": 3553.71866
+      }
+    },
+    {
+      "cache_mode": "miss",
+      "sequence_length": 32,
+      "actual_token_count": 38,
+      "concurrency": 4,
+      "warmup_requests": 100,
+      "measured_requests": 300,
+      "throughput_req_per_s": 85.46151294989632,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 46.649541,
+        "p90": 48.228208,
+        "p95": 48.599375,
+        "p99": 49.461958,
+        "max": 50.091875
+      },
+      "stages_ms": {
+        "queue": 10407.652868,
+        "tokenize": 11.120246999999999,
+        "forward": 3495.4900850000004,
+        "total": 3507.6575439999997
+      }
+    },
+    {
+      "cache_mode": "hit",
+      "sequence_length": 64,
+      "actual_token_count": 70,
+      "concurrency": 1,
+      "warmup_requests": 300,
+      "measured_requests": 300,
+      "throughput_req_per_s": 11145.579848791635,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 0.089125,
+        "p90": 0.098458,
+        "p95": 0.10175000000000001,
+        "p99": 0.11029199999999999,
+        "max": 0.117125
+      },
+      "stages_ms": {
+        "queue": 1.405774,
+        "tokenize": 0.0,
+        "forward": 0.0,
+        "total": 0.371719
+      }
+    },
+    {
+      "cache_mode": "hit",
+      "sequence_length": 64,
+      "actual_token_count": 70,
+      "concurrency": 4,
+      "warmup_requests": 300,
+      "measured_requests": 300,
+      "throughput_req_per_s": 29704.07317103358,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 0.115166,
+        "p90": 0.13433299999999998,
+        "p95": 0.143792,
+        "p99": 0.28825,
+        "max": 0.30616699999999997
+      },
+      "stages_ms": {
+        "queue": 2.5283860000000002,
+        "tokenize": 0.0,
+        "forward": 0.0,
+        "total": 0.525826
+      }
+    },
+    {
+      "cache_mode": "miss",
+      "sequence_length": 64,
+      "actual_token_count": 70,
+      "concurrency": 1,
+      "warmup_requests": 100,
+      "measured_requests": 300,
+      "throughput_req_per_s": 65.66097639175484,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 15.096584,
+        "p90": 15.956000000000001,
+        "p95": 16.517584,
+        "p99": 17.776709,
+        "max": 18.503542000000003
+      },
+      "stages_ms": {
+        "queue": 1.87765,
+        "tokenize": 16.169827,
+        "forward": 4506.814963,
+        "total": 4523.996001
+      }
+    },
+    {
+      "cache_mode": "miss",
+      "sequence_length": 64,
+      "actual_token_count": 70,
+      "concurrency": 4,
+      "warmup_requests": 100,
+      "measured_requests": 300,
+      "throughput_req_per_s": 65.35249811809476,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 60.758541,
+        "p90": 63.530457999999996,
+        "p95": 65.06349999999999,
+        "p99": 71.02995800000001,
+        "max": 71.638041
+      },
+      "stages_ms": {
+        "queue": 13629.379764,
+        "tokenize": 16.655803,
+        "forward": 4569.94204,
+        "total": 4587.756705000001
+      }
+    },
+    {
+      "cache_mode": "hit",
+      "sequence_length": 128,
+      "actual_token_count": 134,
+      "concurrency": 1,
+      "warmup_requests": 300,
+      "measured_requests": 300,
+      "throughput_req_per_s": 11834.708414678873,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 0.08224999999999999,
+        "p90": 0.093416,
+        "p95": 0.0965,
+        "p99": 0.10629200000000001,
+        "max": 0.116125
+      },
+      "stages_ms": {
+        "queue": 1.496258,
+        "tokenize": 0.0,
+        "forward": 0.0,
+        "total": 0.45541800000000005
+      }
+    },
+    {
+      "cache_mode": "hit",
+      "sequence_length": 128,
+      "actual_token_count": 134,
+      "concurrency": 4,
+      "warmup_requests": 300,
+      "measured_requests": 300,
+      "throughput_req_per_s": 31531.92497041517,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 0.108,
+        "p90": 0.125583,
+        "p95": 0.14225,
+        "p99": 0.255,
+        "max": 0.321666
+      },
+      "stages_ms": {
+        "queue": 2.4009169999999997,
+        "tokenize": 0.0,
+        "forward": 0.0,
+        "total": 0.568998
+      }
+    },
+    {
+      "cache_mode": "miss",
+      "sequence_length": 128,
+      "actual_token_count": 134,
+      "concurrency": 1,
+      "warmup_requests": 100,
+      "measured_requests": 300,
+      "throughput_req_per_s": 43.36027718458417,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 22.791083,
+        "p90": 24.416375000000002,
+        "p95": 24.941917,
+        "p99": 27.536375,
+        "max": 30.104584
+      },
+      "stages_ms": {
+        "queue": 2.093994,
+        "tokenize": 25.945780000000003,
+        "forward": 6842.223349,
+        "total": 6869.598341999999
+      }
+    },
+    {
+      "cache_mode": "miss",
+      "sequence_length": 128,
+      "actual_token_count": 134,
+      "concurrency": 4,
+      "warmup_requests": 100,
+      "measured_requests": 300,
+      "throughput_req_per_s": 44.05684941649732,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 90.198042,
+        "p90": 93.259708,
+        "p95": 94.414542,
+        "p99": 100.834625,
+        "max": 101.857708
+      },
+      "stages_ms": {
+        "queue": 20244.523748,
+        "tokenize": 27.746707,
+        "forward": 6777.779215,
+        "total": 6806.910206
+      }
+    },
+    {
+      "cache_mode": "hit",
+      "sequence_length": 256,
+      "actual_token_count": 256,
+      "concurrency": 1,
+      "warmup_requests": 300,
+      "measured_requests": 300,
+      "throughput_req_per_s": 10957.686455444842,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 0.09000000000000001,
+        "p90": 0.09875,
+        "p95": 0.10195900000000001,
+        "p99": 0.108375,
+        "max": 0.115166
+      },
+      "stages_ms": {
+        "queue": 1.742467,
+        "tokenize": 0.0,
+        "forward": 0.0,
+        "total": 0.68455
+      }
+    },
+    {
+      "cache_mode": "hit",
+      "sequence_length": 256,
+      "actual_token_count": 256,
+      "concurrency": 4,
+      "warmup_requests": 300,
+      "measured_requests": 300,
+      "throughput_req_per_s": 30743.611093319672,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 0.110917,
+        "p90": 0.133916,
+        "p95": 0.151625,
+        "p99": 0.31887499999999996,
+        "max": 0.330208
+      },
+      "stages_ms": {
+        "queue": 2.532076,
+        "tokenize": 0.0,
+        "forward": 0.0,
+        "total": 0.7800809999999999
+      }
+    },
+    {
+      "cache_mode": "miss",
+      "sequence_length": 256,
+      "actual_token_count": 256,
+      "concurrency": 1,
+      "warmup_requests": 100,
+      "measured_requests": 300,
+      "throughput_req_per_s": 19.98217667504646,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 49.652208,
+        "p90": 51.720625,
+        "p95": 54.123208,
+        "p99": 56.298959,
+        "max": 59.573417
+      },
+      "stages_ms": {
+        "queue": 2.5186330000000003,
+        "tokenize": 46.641205,
+        "forward": 14913.625718000001,
+        "total": 14961.970075
+      }
+    },
+    {
+      "cache_mode": "miss",
+      "sequence_length": 256,
+      "actual_token_count": 256,
+      "concurrency": 4,
+      "warmup_requests": 100,
+      "measured_requests": 300,
+      "throughput_req_per_s": 19.854377024724677,
+      "errors": 0,
+      "latency_ms": {
+        "p50": 199.727875,
+        "p90": 206.861417,
+        "p95": 216.200708,
+        "p99": 228.159792,
+        "max": 239.717792
+      },
+      "stages_ms": {
+        "queue": 44972.72959,
+        "tokenize": 52.436244,
+        "forward": 15053.159989,
+        "total": 15107.422033
+      }
+    }
+  ]
+}

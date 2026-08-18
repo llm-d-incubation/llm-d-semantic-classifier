@@ -1,63 +1,76 @@
 #!/usr/bin/env bash
-# Fetch the pinned sensitivity model weights into ./artifacts/models/sensitivity/
-# (gitignored — weights are NEVER committed). Deterministic: pinned HF revision,
-# skip when the target files are already present, verify nonzero sizes.
+# Materialise a classifier artifact into ./artifacts/models/<name>/ in ModelCar
+# layout. Weights are NEVER committed (the target is gitignored).
 #
-# Usage: ./hack/fetch-model
+# DEFAULT: the generic multilingual ModernBERT (mmBERT) domain/intent classifier
+# also used by vLLM Semantic Router, pinned by revision (see ADR-0005).
+# Custom or fine-tuned classifiers are opt-in via --classifier.
+#
+# Usage:
+#   ./hack/fetch-model                      # default: generic intent classifier
+#   ./hack/fetch-model --classifier intent  # same, explicit
+#   ./hack/fetch-model --classifier sensitivity   # opt-in custom model
+#   ./hack/fetch-model --list
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REPO="cnuland/semantic-routing-sensitivity"
-REV="43f21d21ac48134464f8510a9ac9c95bdac7ba86"
-TARGET="artifacts/models/sensitivity"
+CLASSIFIER="intent"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --classifier) CLASSIFIER="${2:?--classifier needs a name}"; shift 2;;
+    --list)
+      echo "available classifiers:"
+      echo "  intent       (DEFAULT) llm-semantic-router/mmbert-intent-classifier-merged"
+      echo "               generic ModernBERT sequence classifier, 14 domain labels"
+      echo "  sensitivity  (custom, opt-in) cnuland/semantic-routing-sensitivity"
+      echo "               SentenceTransformers embedding model, taxonomy UNVERIFIED"
+      exit 0;;
+    *) echo "[fetch-model] unknown argument: $1" >&2; exit 2;;
+  esac
+done
 
-FILES=(
-  "model.safetensors"
-  "tokenizer.json"
-  "config.json"
-  "modules.json"
-  "1_Pooling/config.json"
-)
+case "$CLASSIFIER" in
+  intent)
+    REPO="llm-semantic-router/mmbert-intent-classifier-merged"
+    REV="bf8d3833707d1bb8f9237260c271ca0d5982462d"
+    TARGET="artifacts/models/intent"
+    FILES=("model.safetensors" "tokenizer.json" "config.json"
+           "tokenizer_config.json" "special_tokens_map.json" "label_mapping.json")
+    ;;
+  sensitivity)
+    REPO="cnuland/semantic-routing-sensitivity"
+    REV="43f21d21ac48134464f8510a9ac9c95bdac7ba86"
+    TARGET="artifacts/models/sensitivity"
+    FILES=("model.safetensors" "tokenizer.json" "config.json" "modules.json"
+           "1_Pooling/config.json")
+    ;;
+  *)
+    echo "[fetch-model] unknown classifier '$CLASSIFIER' (try --list)" >&2; exit 2;;
+esac
 
 missing=0
 for f in "${FILES[@]}"; do
-  if [ ! -s "$TARGET/$f" ]; then
-    echo "[fetch-model] missing or empty: $TARGET/$f"
-    missing=1
-  fi
+  [ -s "$TARGET/$f" ] || { echo "[fetch-model] missing or empty: $TARGET/$f"; missing=1; }
 done
-
 if [ "$missing" -eq 0 ]; then
-  echo "[fetch-model] model already present in $TARGET — skipping download"
+  echo "[fetch-model] $CLASSIFIER already present in $TARGET, skipping download"
   exit 0
 fi
 
 mkdir -p "$TARGET"
-python3 - "$REPO" "$REV" "$TARGET" <<'PY'
-import os
-import sys
+python3 - "$REPO" "$REV" "$TARGET" "${FILES[@]}" <<'PY'
+import os, sys
 from huggingface_hub import hf_hub_download
-
-repo, rev, target = sys.argv[1], sys.argv[2], sys.argv[3]
-for name in ("model.safetensors", "tokenizer.json", "config.json", "modules.json"):
-    hf_hub_download(
-        repo_id=repo, revision=rev, filename=name,
-        local_dir=target,
-    )
-# nested file lives under the model's 1_Pooling/ module dir
-os.makedirs(os.path.join(target, "1_Pooling"), exist_ok=True)
-hf_hub_download(
-    repo_id=repo, revision=rev, filename="1_Pooling/config.json",
-    local_dir=target,
-)
-print(f"[fetch-model] downloaded {repo}@{rev} -> {target}")
+repo, rev, target, *files = sys.argv[1:]
+for name in files:
+    d = os.path.dirname(name)
+    if d:
+        os.makedirs(os.path.join(target, d), exist_ok=True)
+    hf_hub_download(repo_id=repo, revision=rev, filename=name, local_dir=target)
+print(f"[fetch-model] downloaded {repo}@{rev[:12]} -> {target}")
 PY
 
-# verify every required file is present and nonzero
 for f in "${FILES[@]}"; do
-  if [ ! -s "$TARGET/$f" ]; then
-    echo "[fetch-model] FAIL: $TARGET/$f missing or zero-size after download" >&2
-    exit 1
-  fi
+  [ -s "$TARGET/$f" ] || { echo "[fetch-model] FAIL: $TARGET/$f missing or zero-size" >&2; exit 1; }
 done
-echo "[fetch-model] OK: all files present and nonzero in $TARGET"
+echo "[fetch-model] OK: $CLASSIFIER ($REPO@${REV:0:12}) present in $TARGET"

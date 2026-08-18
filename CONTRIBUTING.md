@@ -36,7 +36,7 @@ downloads a pinned model artifact, so it is not run on every push.
 2. **A test that failed first.** Write the test, watch it fail for the reason you
    expect, then implement. For bugs, the regression test comes before the fix.
 3. **Evidence for behaviour claims.** Performance changes need comparable
-   before/after p50/p95/p99 numbers with the measurement conditions recorded —
+   before/after p50/p95/p99 numbers with the measurement conditions recorded -
    hardware, concurrency, cache mode, input length, sample counts. Average-only
    latency claims are not accepted.
 4. **No weakened assertions.** Changing or deleting an existing test assertion is
@@ -67,7 +67,7 @@ These come from the project's design and are not negotiable in a patch:
 Substantial changes are specification-first. Look under `specs/` for the format:
 problem, observable behaviour, non-goals, acceptance criteria mapped to test IDs,
 failure contract, and rollback. Test IDs (`U-`, `I-`, `S-`, `P-`, `R-`) come from
-`tests/TEST_MATRIX.md` and are stable evidence anchors — reuse them rather than
+`tests/TEST_MATRIX.md` and are stable evidence anchors, reuse them rather than
 inventing new numbering. See
 [`docs/research/development-method.md`](docs/research/development-method.md).
 
@@ -82,5 +82,6 @@ signoff.
 
 ## Getting help
 
-Open an issue describing what you are trying to do. For security reports, follow
-[SECURITY.md](SECURITY.md) instead.
+Ask in [`#sig-semantic-classifier`](https://llm-d.ai/slack) in the llm-d Slack,
+or open an issue describing what you are trying to do. For security reports,
+follow [SECURITY.md](SECURITY.md) instead.

@@ -1,3 +1,5 @@
+# GitHub-native ownership. The llm-d/Kubernetes-style OWNERS file is also
+# present for consistency with sibling llm-d-incubation projects.
 # Default owner for everything in this repository.
 * @cnuland
 

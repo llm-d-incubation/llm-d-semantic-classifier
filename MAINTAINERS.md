@@ -15,7 +15,7 @@ existing maintainer will propose additions publicly in this file.
 Every change requires review by a maintainer, a DCO `Signed-off-by` line, and
 test evidence for the behaviour it claims (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 The maintainer merging a change owns its correctness, licensing, and security
-implications — including changes authored with AI assistance.
+implications, including changes authored with AI assistance.
 
 ## Escalation
 

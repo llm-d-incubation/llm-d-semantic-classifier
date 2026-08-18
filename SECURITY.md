@@ -30,16 +30,16 @@ security fixes. There are no long-term support branches yet.
 llm-d-sc sits in the inference request path and handles untrusted request
 content. Reports are particularly welcome in these areas:
 
-- **Classifier artifact handling** — a malicious or malformed model artifact
+- **Classifier artifact handling**, a malicious or malformed model artifact
   (`/models`) causing memory unsafety, path escape, or code execution.
-- **Input handling** — tokenizer or tensor construction faults on adversarial
+- **Input handling**, tokenizer or tensor construction faults on adversarial
   input, including oversized or pathological Unicode.
-- **Cache identity** — any path by which a cached classification could be served
+- **Cache identity**, any path by which a cached classification could be served
   under a different classifier, model, tokenizer, or taxonomy revision than the
   one that produced it.
-- **Telemetry leakage** — raw prompt or session content appearing in logs,
+- **Telemetry leakage**, raw prompt or session content appearing in logs,
   metrics, or traces (the design retains only hashes and identifiers).
-- **Resource exhaustion** — bypassing bounded inference admission, or unbounded
+- **Resource exhaustion**, bypassing bounded inference admission, or unbounded
   memory growth under load.
 
 ## Non-scope
