@@ -24,7 +24,16 @@ claims and not as a service level objective.
 | Independent reproduction | **none** |
 
 Full machine-readable results, including per-scenario manifests:
-[`20260818-full-matrix.json`](benchmarks/20260818-full-matrix.json).
+[`20260818-full-matrix.json`](benchmarks/20260818-full-matrix.json) and
+[`20260818-bootstrap-sha-462c270.json`](benchmarks/20260818-bootstrap-sha-462c270.json).
+
+**Reproducibility.** The matrix was run twice, before and after a substantial
+refactor that moved caching and metrics onto the real classifier path and
+renamed a large part of the tree. Results agreed within run-to-run noise: cache
+hits identical at 0.09 ms p50, misses within 0.9 ms at every input length
+(12.66 vs 11.81 at 32 tokens, 16.08 vs 15.10 at 64, 22.72 vs 22.79 at 128,
+49.69 vs 49.65 at 256). Tables below cite the second run, taken at the commit
+intended for the first upstream push.
 
 ## Cache hits, end to end over gRPC
 
