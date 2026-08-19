@@ -1,0 +1,12 @@
+# ModelCar: a classifier artifact as an OCI image, carrying ONLY model files.
+#
+# Kept separate from the service image on purpose. The model is the thing that
+# changes on its own schedule, is large, and must be independently digest-pinned
+# (I-062). Baking it into the service image would couple a classifier revision
+# bump to a service rebuild and make the digest ambiguous.
+#
+# Files are world-readable and the directories world-traversable because
+# Kubernetes assigns an arbitrary non-root UID that owns none of them (I-061).
+FROM registry.access.redhat.com/ubi9/ubi-micro
+COPY --chmod=0444 models/ /models/
+USER 65534

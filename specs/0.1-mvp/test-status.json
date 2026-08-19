@@ -14,10 +14,10 @@
   "U-022": "green"
  },
  "AC-003": {
-  "I-060": "pending",
-  "I-061": "pending",
-  "I-062": "pending",
-  "I-063": "pending",
+  "I-060": "green",
+  "I-061": "green",
+  "I-062": "green",
+  "I-063": "green",
   "I-064": "green",
   "S-010": "pending",
   "S-051": "pending",

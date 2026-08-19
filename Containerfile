@@ -1,9 +1,13 @@
 # llm-d-sc Kubernetes service container: multi-stage build, no model baked in.
 #
-# The real model is NOT in this image; it arrives via a ModelCar mount at /models
-# (LLM_D_SC_MODEL_DIR). The served pipeline loads and warms that real model.
-# KNOWN GAP: the classifier DEFINITION (prototypes/taxonomy) is still read from
-# committed fixtures rather than the artifact — see README integration gap 3.
+# The model is NOT in this image. It arrives via a ModelCar mount at /models
+# (LLM_D_SC_MODEL_DIR), so the image is model-agnostic and a classifier revision
+# change never requires rebuilding the service.
+#
+# The classifier DEFINITION (labels + anchors) IS compiled in: the three built-in
+# taxonomies are small text files, and shipping them means an instance can always
+# classify against a real taxonomy with no external file. A custom definition can
+# still be supplied at runtime by pointing LLM_D_SC_CLASSIFIER at a path.
 
 FROM rust:1-slim AS builder
 RUN apt-get update \
@@ -12,17 +16,26 @@ RUN apt-get update \
 
 WORKDIR /src
 COPY . .
-RUN cargo build --release --bin llm-d-sc-server
+RUN cargo build --release \
+      --bin llm-d-sc-server \
+      --bin llm-d-sc-classify \
+      --bin llm-d-sc-gateway-probe
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal AS runtime
 ENV LLM_D_SC_LISTEN=0.0.0.0:50051 \
-    LLM_D_SC_MODEL_DIR=/models
+    LLM_D_SC_MODEL_DIR=/models \
+    LLM_D_SC_CLASSIFIER=complexity
 
 # Service binary.
 COPY --from=builder /src/target/release/llm-d-sc-server /usr/local/bin/llm-d-sc
+# Demo CLI, and the dummy-gateway RTT probe used for the topology evidence
+# (P-030..P-033): the probe must run INSIDE the cluster to measure the real
+# same-Pod and ClusterIP network paths.
+COPY --from=builder /src/target/release/llm-d-sc-classify /usr/local/bin/llm-d-sc-classify
+COPY --from=builder /src/target/release/llm-d-sc-gateway-probe /usr/local/bin/llm-d-sc-gateway-probe
 
-# Deterministic synthetic fixtures (tokenizer + prototypes) required to boot.
-# These are NOT a model — the real model is mounted at /models.
+# Deterministic synthetic fixtures for the weight-free pipeline. These are NOT a
+# model; the real model is mounted at /models.
 COPY --from=builder /src/tests/fixtures/modelcar/tokenizer.json \
      /src/tests/fixtures/modelcar/tokenizer.json
 COPY --from=builder /src/tests/fixtures/modelcar/synthetic-prototypes.json \

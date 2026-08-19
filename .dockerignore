@@ -1,0 +1,10 @@
+# Build context hygiene: the image is built from source inside the cluster, so
+# local build output and fetched model weights must never be uploaded. target/
+# alone is multiple GB and artifacts/ holds the gitignored model files.
+target/
+artifacts/
+training/data/
+training/models/
+.git/
+upstream-staging/
+docs/

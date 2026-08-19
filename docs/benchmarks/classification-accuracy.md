@@ -35,6 +35,7 @@ Confusion for the best arm (rows = truth, columns = predicted):
 
 | Arm | n | Accuracy | Macro F1 | Boundary cases | p50 | p99 |
 |---|---:|---:|---:|---:|---:|---:|
+| `retrained` | 60 | 0.8333 | 0.8342 | 0.7500 | 8.5 ms | 10.1 ms |
 | `baseline-minilm` | 60 | 0.7500 | 0.7459 | 0.6000 | 23.4 ms | 35.0 ms |
 | `complexity` | 60 | 0.7500 | 0.7420 | 0.7500 | 8.7 ms | 10.3 ms |
 
@@ -42,10 +43,10 @@ Confusion for the best arm (rows = truth, columns = predicted):
 
 | | MINIMAL | LOW | MODERATE | HIGH |
 |---|---:|---:|---:|---:|
-| **MINIMAL** | 14 | 1 | 0 | 0 |
-| **LOW** | 4 | 9 | 0 | 2 |
-| **MODERATE** | 0 | 1 | 11 | 3 |
-| **HIGH** | 0 | 1 | 3 | 11 |
+| **MINIMAL** | 13 | 2 | 0 | 0 |
+| **LOW** | 1 | 11 | 3 | 0 |
+| **MODERATE** | 0 | 0 | 13 | 2 |
+| **HIGH** | 0 | 0 | 2 | 13 |
 
 ## sensitivity
 
