@@ -146,7 +146,27 @@ fn run_at_width(width: usize, jobs: usize) -> (std::time::Duration, String) {
     )
 }
 
-/// P-020 and P-021: concurrency 1 versus concurrency 4.
+/// Number of distinct misses driven through the executor in the width tests.
+const JOBS: usize = 24;
+
+/// P-020: concurrency 1 (the serial baseline).
+///
+/// Split from P-021 deliberately: the evidence collector derives a test ID from
+/// the function NAME and takes only the first match, so a single
+/// `p020_p021_...` function would silently register P-020 and leave P-021
+/// looking unexecuted. One ID per test function.
+#[test]
+#[ignore]
+fn p020_concurrency_one_baseline() {
+    let (elapsed, stats) = run_at_width(1, JOBS);
+    println!("P-020 concurrency 1: {JOBS} jobs in {elapsed:?} -> {stats}");
+    assert!(
+        elapsed > std::time::Duration::ZERO,
+        "the serial baseline must record real work"
+    );
+}
+
+/// P-021: concurrency 4 must beat concurrency 1.
 ///
 /// This is the before/after for the executor pool fix. Under the previous
 /// single-threaded executor these two configurations were the SAME
@@ -154,21 +174,79 @@ fn run_at_width(width: usize, jobs: usize) -> (std::time::Duration, String) {
 /// latency.
 #[test]
 #[ignore]
-fn p020_p021_concurrency_one_versus_four() {
-    const JOBS: usize = 24;
-
+fn p021_concurrency_four_outperforms_one() {
     let (serial, serial_stats) = run_at_width(1, JOBS);
-    println!("P-020 concurrency 1: {JOBS} jobs in {serial:?} -> {serial_stats}");
+    println!("P-021 baseline (width 1): {serial:?} -> {serial_stats}");
 
     let (parallel, parallel_stats) = run_at_width(4, JOBS);
     println!("P-021 concurrency 4: {JOBS} jobs in {parallel:?} -> {parallel_stats}");
 
     let speedup = serial.as_secs_f64() / parallel.as_secs_f64();
     println!("P-021: speedup {speedup:.2}x over concurrency 1");
-
     assert!(
         speedup > 1.3,
         "four workers gave only {speedup:.2}x over one ({serial:?} -> {parallel:?}); \
          the executor is not executing forwards in parallel"
+    );
+}
+
+/// P-023: saturation at concurrency 32 must not collapse throughput.
+///
+/// Past the executor width, extra concurrency should QUEUE rather than degrade:
+/// the failure this guards against is thrashing, where oversubscription makes
+/// aggregate throughput worse than the width it was tuned for.
+#[test]
+#[ignore]
+fn p023_concurrency_32_saturation_does_not_collapse() {
+    let (four, four_stats) = run_at_width(4, 64);
+    println!("P-023 width 4, 64 jobs: {four:?} -> {four_stats}");
+
+    let (thirty_two, wide_stats) = run_at_width(32, 64);
+    println!("P-023 width 32, 64 jobs: {thirty_two:?} -> {wide_stats}");
+
+    // Oversubscribing 8x on a machine with far fewer cores must not make things
+    // dramatically WORSE. Some loss is expected and acceptable; a collapse is not.
+    assert!(
+        thirty_two < four * 3,
+        "width 32 took {thirty_two:?} against width 4's {four:?}; \
+         oversubscription is collapsing throughput rather than queueing"
+    );
+}
+
+/// P-002: a cache hit over a real gRPC localhost round trip.
+///
+/// P-001 measures the in-process cache. This measures what a caller actually
+/// experiences, so the transport cost is included rather than assumed away.
+#[test]
+#[ignore]
+fn p002_grpc_localhost_cache_hit() {
+    use llm_d_sc::grpc::classify::{ClassifyClient, ClassifyRequest, ClassifyServer};
+
+    let server = ClassifyServer::bind_with_classifier("127.0.0.1:0", classifier())
+        .expect("server must bind");
+    let mut client = ClassifyClient::connect(server.local_addr()).expect("client must connect");
+
+    let req = |id: &str| ClassifyRequest {
+        request_id: id.to_string(),
+        session_id: "sess-p002".to_string(),
+        context: "a stable prompt served repeatedly from the cache".to_string(),
+        signals: vec!["sensitivity".to_string()],
+    };
+
+    let t0 = Instant::now();
+    client.classify(req("p002-miss")).expect("miss must succeed");
+    let miss = t0.elapsed();
+
+    const HITS: u32 = 100;
+    let t1 = Instant::now();
+    for i in 0..HITS {
+        client.classify(req(&format!("p002-hit-{i}"))).expect("hit must succeed");
+    }
+    let hit = t1.elapsed() / HITS;
+
+    println!("P-002: gRPC miss {miss:?}, mean gRPC cache hit {hit:?}");
+    assert!(
+        hit < miss,
+        "a cached gRPC round trip ({hit:?}) must be faster than the miss ({miss:?})"
     );
 }

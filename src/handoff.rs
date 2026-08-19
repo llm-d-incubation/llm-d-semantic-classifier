@@ -44,10 +44,21 @@ pub const WORKERS_ENV: &str = "LLM_D_SC_INFERENCE_WORKERS";
 
 /// The default number of executor threads.
 ///
-/// A CPU Candle forward is itself internally threaded, so one executor thread
-/// per core over-subscribes the machine and each forward gets slower. The
-/// measured throughput knee on the reference homelab was at 4 concurrent
-/// forwards, so the default is 4 clamped to the available parallelism.
+/// This default is a LATENCY choice, not a throughput knee. Measured on the
+/// reference homelab (P-023, 64 concurrent misses):
+///
+/// | width | wall clock | forward p50 | forward p99 |
+/// |-------|-----------|-------------|-------------|
+/// | 4     | 150.6 ms  | 8.19 ms     | 13.3 ms     |
+/// | 32    | 80.3 ms   | 32.8 ms     | 65.5 ms     |
+///
+/// Oversubscribing keeps improving aggregate throughput, because a CPU Candle
+/// forward is itself internally threaded and the extra work packs the cores.
+/// But it does so by queueing inside each forward, and p99 blows past the
+/// sub-20ms budget this service exists to meet. A classifier that answers late
+/// is useless to a router that has a request waiting, so the default optimises
+/// the tail. Raise `LLM_D_SC_INFERENCE_WORKERS` if you are batching offline and
+/// genuinely want throughput instead.
 pub fn default_worker_width() -> usize {
     if let Ok(v) = std::env::var(WORKERS_ENV) {
         if let Ok(n) = v.parse::<usize>() {
