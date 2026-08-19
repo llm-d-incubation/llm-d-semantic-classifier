@@ -78,6 +78,12 @@ depends on a disclosure rule, and no volume of synthetic data can learn a policy
 does not encode. Complexity reaches 0.975 on the same method because SIMPLE versus
 REASONING is a property of the text itself.
 
+The retrained model was therefore NOT published. Shipping a second artifact whose advantage
+is not established adds confusion rather than value, and the currently pinned model has the
+marginally better overall number and is the one the golden-fixture tests (I-021 through
+I-024) were validated against. The retrained weights and the pipeline that produced them are
+reproducible from `training/`.
+
 The implication is that the sensitivity ceiling is a taxonomy-design problem rather than a
 training problem, and the lever is anchors rather than epochs. An adopter who encodes their
 own disclosure policy in `anchors.json` should be expected to beat the shipped defaults,
