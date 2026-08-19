@@ -59,3 +59,26 @@ Listed so the history is legible rather than quietly rewritten.
 If you hit something not listed here, please open an issue. Reports that include
 the commit SHA, the classifier artifact revision, and how to reproduce are the
 most useful. Security issues follow [SECURITY.md](../SECURITY.md) instead.
+
+## Why sensitivity plateaus around 0.88-0.89
+
+Worth stating explicitly, because the obvious next step does not work.
+
+The first sensitivity model was trained on defective data (the generator's reasoning
+traces rather than prompts). Retraining on clean, cross-verified synthetic data did NOT
+improve overall accuracy: 0.8933 to 0.8800 on the same held-out set, which at n=75 is a
+one-sample difference and therefore a wash. Boundary-case accuracy did improve, 0.7600 to
+0.8000.
+
+The confusion matrix says why. `CONFIDENTIAL` and `NEVER_EGRESS` are classified perfectly.
+Essentially every error is `INTERNAL` predicted as `CONFIDENTIAL`, or `PUBLIC` as
+`INTERNAL`. Those boundaries are ORGANISATIONAL POLICY, not properties of the text:
+whether "summarise the postmortem for last Tuesday's outage" is internal or confidential
+depends on a disclosure rule, and no volume of synthetic data can learn a policy the data
+does not encode. Complexity reaches 0.975 on the same method because SIMPLE versus
+REASONING is a property of the text itself.
+
+The implication is that the sensitivity ceiling is a taxonomy-design problem rather than a
+training problem, and the lever is anchors rather than epochs. An adopter who encodes their
+own disclosure policy in `anchors.json` should be expected to beat the shipped defaults,
+which necessarily encode an invented policy. See [classifiers.md](classifiers.md).

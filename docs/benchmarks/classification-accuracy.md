@@ -53,6 +53,7 @@ Confusion for the best arm (rows = truth, columns = predicted):
 | Arm | n | Accuracy | Macro F1 | Boundary cases | p50 | p99 |
 |---|---:|---:|---:|---:|---:|---:|
 | `finetuned` | 75 | 0.8933 | 0.8928 | 0.7600 | 8.1 ms | 12.9 ms |
+| `retrained` | 75 | 0.8800 | 0.8804 | 0.8000 | 8.4 ms | 16.4 ms |
 | `baseline` | 75 | 0.7067 | 0.6920 | 0.6400 | 22.1 ms | 24.1 ms |
 
 Confusion for the best arm (rows = truth, columns = predicted):

@@ -1,0 +1,55 @@
+{
+  "accuracy": 0.88,
+  "classifier": "classifiers/sensitivity.json",
+  "confusion": [
+    [
+      12,
+      3,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      10,
+      5,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      15,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      1,
+      14,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      15
+    ]
+  ],
+  "dataset": "evals/datasets/sensitivity-heldout.jsonl",
+  "hard_case_accuracy": 0.8,
+  "labels": [
+    "PUBLIC",
+    "INTERNAL",
+    "CONFIDENTIAL",
+    "REGULATED",
+    "NEVER_EGRESS"
+  ],
+  "latency_p50_ms": 8.396,
+  "latency_p99_ms": 16.352,
+  "macro_f1": 0.8804050355774494,
+  "model": "training/models/sensitivity",
+  "n": 75
+}
