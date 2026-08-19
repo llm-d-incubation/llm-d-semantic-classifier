@@ -138,8 +138,10 @@ impl ExactCache {
 
     /// Store a result, evicting the oldest entry if the cache is at capacity.
     fn store(&mut self, key: CacheKey, result: ClassificationResult) {
-        if self.entries.contains_key(&key) {
-            self.entries.insert(key, result);
+        // Re-storing an existing key must not consume a second slot, and must
+        // not touch the eviction order. The entry API does the lookup once.
+        if let Some(existing) = self.entries.get_mut(&key) {
+            *existing = result;
             return;
         }
         while self.entries.len() >= self.capacity {
@@ -358,7 +360,10 @@ mod bounded_tests {
             tokenizer_revision: "t".into(),
             taxonomy_revision: "t".into(),
             status: crate::classify::ClassifyStatus::Ok,
-            ranked: vec![crate::classify::RankedSignal { id: id.into(), score: 1.0 }],
+            ranked: vec![crate::classify::RankedSignal {
+                id: id.into(),
+                score: 1.0,
+            }],
         }
     }
 
@@ -392,7 +397,9 @@ mod bounded_tests {
         cache.classify(k("first"), || Ok(result("a"))).unwrap();
         cache.classify(k("second"), || Ok(result("b"))).unwrap();
         // Re-classifying an existing key is a HIT and must not grow the cache.
-        cache.classify(k("first"), || panic!("must be a hit")).unwrap();
+        cache
+            .classify(k("first"), || panic!("must be a hit"))
+            .unwrap();
         assert_eq!(cache.len(), 2);
 
         // The third distinct key evicts the oldest, which is "first".

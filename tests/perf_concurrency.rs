@@ -18,15 +18,15 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
-use llm_d_sc::classify::{
-    CandleClassifier, ClassificationInput, ClassifierRuntime, ServiceCore,
-};
+use llm_d_sc::classify::{CandleClassifier, ClassificationInput, ClassifierRuntime, ServiceCore};
 use llm_d_sc::handoff::InferenceExecutor;
-use llm_d_sc::metrics::{LatencyStage, Metrics};
+use llm_d_sc::metrics::LatencyStage;
 use llm_d_sc::taxonomy::ClassifierDefinition;
 
 fn classifier() -> CandleClassifier {
-    let def = ClassifierDefinition::built_in("complexity").unwrap().unwrap();
+    let def = ClassifierDefinition::built_in("complexity")
+        .unwrap()
+        .unwrap();
     CandleClassifier::from_modelcar_with(
         &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("artifacts/models/complexity"),
         def,
@@ -49,20 +49,25 @@ fn p001_in_process_cache_hit_is_orders_of_magnitude_cheaper_than_a_miss() {
     let core = ServiceCore::new(classifier());
 
     let t0 = Instant::now();
-    core.classify(input("a distinctive prompt for the miss path")).unwrap();
+    core.classify(input("a distinctive prompt for the miss path"))
+        .unwrap();
     let miss = t0.elapsed();
 
     // Warm, then measure hits.
-    core.classify(input("a distinctive prompt for the miss path")).unwrap();
+    core.classify(input("a distinctive prompt for the miss path"))
+        .unwrap();
     const HITS: u32 = 200;
     let t1 = Instant::now();
     for _ in 0..HITS {
-        core.classify(input("a distinctive prompt for the miss path")).unwrap();
+        core.classify(input("a distinctive prompt for the miss path"))
+            .unwrap();
     }
     let hit = t1.elapsed() / HITS;
 
-    println!("P-001: miss {miss:?}, mean hit {hit:?}, ratio {:.0}x",
-             miss.as_secs_f64() / hit.as_secs_f64().max(1e-9));
+    println!(
+        "P-001: miss {miss:?}, mean hit {hit:?}, ratio {:.0}x",
+        miss.as_secs_f64() / hit.as_secs_f64().max(1e-9)
+    );
     assert!(
         hit * 20 < miss,
         "a cache hit ({hit:?}) must be dramatically cheaper than a miss ({miss:?})"
@@ -90,7 +95,11 @@ fn p004_same_key_burst_miss_coalesces() {
             })
         })
         .collect();
-    let ok = handles.into_iter().map(|h| h.join().unwrap()).filter(|b| *b).count();
+    let ok = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .filter(|b| *b)
+        .count();
     let elapsed = started.elapsed();
 
     let n = forwards.load(Ordering::SeqCst);
@@ -142,7 +151,10 @@ fn run_at_width(width: usize, jobs: usize) -> (std::time::Duration, String) {
     let p = metrics.stage_percentiles(LatencyStage::Forward);
     (
         elapsed,
-        format!("forward p50 {:?} p95 {:?} p99 {:?} (n={})", p.p50, p.p95, p.p99, p.count),
+        format!(
+            "forward p50 {:?} p95 {:?} p99 {:?} (n={})",
+            p.p50, p.p95, p.p99, p.count
+        ),
     )
 }
 
@@ -234,13 +246,17 @@ fn p002_grpc_localhost_cache_hit() {
     };
 
     let t0 = Instant::now();
-    client.classify(req("p002-miss")).expect("miss must succeed");
+    client
+        .classify(req("p002-miss"))
+        .expect("miss must succeed");
     let miss = t0.elapsed();
 
     const HITS: u32 = 100;
     let t1 = Instant::now();
     for i in 0..HITS {
-        client.classify(req(&format!("p002-hit-{i}"))).expect("hit must succeed");
+        client
+            .classify(req(&format!("p002-hit-{i}")))
+            .expect("hit must succeed");
     }
     let hit = t1.elapsed() / HITS;
 

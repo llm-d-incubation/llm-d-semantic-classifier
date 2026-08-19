@@ -17,8 +17,8 @@
 use std::time::Duration;
 
 use llm_d_sc::classify::{
-    ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, RuntimeMetadata, ClassifyStatus,
-    RankedSignal,
+    ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, ClassifyStatus,
+    RankedSignal, RuntimeMetadata,
 };
 use llm_d_sc::grpc::classify::generated;
 use llm_d_sc::grpc::classify::ClassifyServiceImpl;

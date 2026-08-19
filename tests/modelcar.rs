@@ -25,14 +25,19 @@ fn i060_modelcar_contains_required_files() {
         let path = dir.join(f);
         let meta = std::fs::metadata(&path)
             .unwrap_or_else(|e| panic!("required ModelCar file {} missing: {e}", path.display()));
-        assert!(meta.len() > 0, "required file {} is zero-size", path.display());
+        assert!(
+            meta.len() > 0,
+            "required file {} is zero-size",
+            path.display()
+        );
     }
 
     // Each required file, removed individually, must break warmup. Asserting
     // only on a wholly empty directory would pass even if the check looked at
     // just one of the three.
     for omit in MODELCAR_REQUIRED_FILES {
-        let partial = std::env::temp_dir().join(format!("llm-d-sc-i060-{}", omit.replace('/', "_")));
+        let partial =
+            std::env::temp_dir().join(format!("llm-d-sc-i060-{}", omit.replace('/', "_")));
         let _ = std::fs::remove_dir_all(&partial);
         std::fs::create_dir_all(&partial).unwrap();
         for f in MODELCAR_REQUIRED_FILES {
@@ -69,8 +74,14 @@ fn i062_artifact_model_digest_recorded() {
     runtime
         .warmup_modelcar(model_dir("complexity"), MODELCAR_REQUIRED_FILES)
         .expect("complexity ModelCar must warm");
-    let digest = runtime.artifact_digest().expect("digest must be recorded").to_string();
-    assert!(digest.starts_with("blake3:"), "digest must name its algorithm: {digest}");
+    let digest = runtime
+        .artifact_digest()
+        .expect("digest must be recorded")
+        .to_string();
+    assert!(
+        digest.starts_with("blake3:"),
+        "digest must name its algorithm: {digest}"
+    );
 
     // Deterministic: the same bytes must always produce the same digest.
     let again = modelcar_digest(model_dir("complexity"), MODELCAR_REQUIRED_FILES).unwrap();

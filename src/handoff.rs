@@ -118,12 +118,7 @@ impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
     /// worker waits for the next job while the others run forwards. Handing the
     /// job off before the forward means the lock is never held across
     /// `classify`.
-    pub fn spawn_with_workers(
-        service: R,
-        metrics: Metrics,
-        bound: usize,
-        workers: usize,
-    ) -> Self {
+    pub fn spawn_with_workers(service: R, metrics: Metrics, bound: usize, workers: usize) -> Self {
         let workers = workers.max(1);
         let service = Arc::new(service);
         let permits = Arc::new(Semaphore::new(bound));
@@ -158,8 +153,7 @@ impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
                                     guard.blocking_recv()
                                 };
                                 let Some(job) = job else { return };
-                                metrics
-                                    .record_stage(LatencyStage::Queue, job.queued_at.elapsed());
+                                metrics.record_stage(LatencyStage::Queue, job.queued_at.elapsed());
                                 let result = service.classify(job.input);
                                 let _ = job.respond.send(result);
                                 // `job._permit` is dropped here (releasing the

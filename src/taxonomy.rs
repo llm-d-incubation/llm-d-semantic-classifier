@@ -91,13 +91,16 @@ impl ClassifierDefinition {
             "sensitivity" => SENSITIVITY,
             _ => return None,
         };
-        Some(Self::from_str(raw))
+        Some(Self::parse(raw))
     }
 
     /// Parse a definition from JSON text, validating its internal consistency.
-    pub fn from_str(raw: &str) -> Result<Self, TaxonomyError> {
-        let def: ClassifierDefinition =
-            serde_json::from_str(raw).map_err(TaxonomyError::Json)?;
+    ///
+    /// Named `parse` rather than `from_str` so it is not mistaken for
+    /// `std::str::FromStr::from_str`, which callers may reasonably expect to be
+    /// reachable through `"...".parse()`.
+    pub fn parse(raw: &str) -> Result<Self, TaxonomyError> {
+        let def: ClassifierDefinition = serde_json::from_str(raw).map_err(TaxonomyError::Json)?;
         def.validate()?;
         Ok(def)
     }
@@ -105,7 +108,7 @@ impl ClassifierDefinition {
     /// Load a custom definition from a path.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, TaxonomyError> {
         let raw = std::fs::read_to_string(path).map_err(TaxonomyError::Io)?;
-        Self::from_str(&raw)
+        Self::parse(&raw)
     }
 
     /// Resolve a built-in NAME or a PATH to a custom definition.
@@ -124,8 +127,7 @@ impl ClassifierDefinition {
 
     /// Resolve from the environment, falling back to the default built-in.
     pub fn from_env() -> Result<Self, TaxonomyError> {
-        let spec =
-            std::env::var(CLASSIFIER_ENV).unwrap_or_else(|_| DEFAULT_CLASSIFIER.to_string());
+        let spec = std::env::var(CLASSIFIER_ENV).unwrap_or_else(|_| DEFAULT_CLASSIFIER.to_string());
         Self::resolve(&spec)
     }
 
@@ -236,7 +238,7 @@ mod tests {
           "labels":["A","B"],
           "anchors":{"A":["only a"]}
         }"#;
-        let err = ClassifierDefinition::from_str(raw).expect_err("must reject missing anchors");
+        let err = ClassifierDefinition::parse(raw).expect_err("must reject missing anchors");
         assert!(
             format!("{err}").contains("has no anchors"),
             "error must name the unanchored label, got: {err}"

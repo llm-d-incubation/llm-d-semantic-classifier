@@ -128,7 +128,9 @@ fn i012_repeated_calls_do_not_reload_model_or_tokenizer() {
 #[ignore]
 fn i020_real_sensitivity_artifact_loads() {
     let clf = sensitivity_classifier();
-    let result = clf.classify(input("what is the capital of Denmark")).unwrap();
+    let result = clf
+        .classify(input("what is the capital of Denmark"))
+        .unwrap();
     assert_eq!(result.classifier_id, "sensitivity");
     assert_eq!(result.ranked.len(), 5, "all five tiers must be ranked");
     assert!(
@@ -154,7 +156,11 @@ fn i021_public_like_golden_fixture() {
         "What causes the northern lights?",
         "Explain how a bicycle gear ratio works.",
     ] {
-        assert_eq!(ranked(&clf, text)[0], "PUBLIC", "\"{text}\" must rank PUBLIC first");
+        assert_eq!(
+            ranked(&clf, text)[0],
+            "PUBLIC",
+            "\"{text}\" must rank PUBLIC first"
+        );
     }
 }
 
@@ -225,13 +231,15 @@ fn i030_warm_cache_hit_invokes_zero_model_forwards() {
     let forwards = clf.forward_call_counter();
     let core = ServiceCore::new(clf);
 
-    core.classify(input("warm this key")).expect("miss must succeed");
+    core.classify(input("warm this key"))
+        .expect("miss must succeed");
     let after_miss_t = tokenizer_calls.load(Ordering::SeqCst);
     let after_miss_f = forwards.load(Ordering::SeqCst);
     assert_eq!(after_miss_f, 1, "the first call must be a real forward");
 
     for _ in 0..5 {
-        core.classify(input("warm this key")).expect("hit must succeed");
+        core.classify(input("warm this key"))
+            .expect("hit must succeed");
     }
     assert_eq!(
         tokenizer_calls.load(Ordering::SeqCst),
@@ -269,7 +277,9 @@ fn i031_simultaneous_same_key_misses_have_bounded_forward_count() {
             })
         })
         .collect();
-    let ok = handles.into_iter().filter(|h| !h.is_finished() || true)
+    let ok = handles
+        .into_iter()
+        .filter(|h| !h.is_finished() || true)
         .map(|h| h.join().expect("caller thread must not panic"))
         .filter(|b| *b)
         .count();

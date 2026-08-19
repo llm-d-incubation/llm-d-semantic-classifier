@@ -124,6 +124,10 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | I-090 | executor workers run forwards in parallel, not merely admit them | 0.1 |
 | I-091 | single-worker executor is observably serial (control for I-090) | 0.1 |
 | I-092 | accept counter observes reconnection (control for I-002) | 0.1 |
+| I-095 | gRPC validates requested signal against the loaded runtime | 0.1 |
+| I-100 | source change does not invalidate the dependency build layer; manifest change does | 0.1 fix |
+| I-101 | built image contains both expected binaries, executable | 0.1 fix |
+| I-102 | built image reaches READY from a ModelCar and classifies correctly | 0.1 fix |
 | I-080 | latency decomposition metrics visible | 0.1 |
 | I-081 | overload counter increments | 0.20 |
 | I-085 | trace capture has IDs/hashes but no raw prompt | 0.1 |
@@ -230,3 +234,4 @@ Coverage percentage is diagnostic, not proof. Required instead:
 - **U-010 / AC-010**: resolved by `docs/decisions/0001-no-route-field-in-response.md` —
   the response schema must not contain a route/endpoint field at all (not merely
   "never set"). A schema-level test is the required proof.
+| P-100 | cold build versus source-only rebuild, wall clock recorded | 0.1 fix |

@@ -10,9 +10,7 @@
 //! Requires fetched weights; run with `cargo test --test runtime_metadata -- --ignored`.
 
 use llm_d_sc::cache::CacheKey;
-use llm_d_sc::classify::{
-    CandleClassifier, ClassificationInput, ClassifierRuntime, ServiceCore,
-};
+use llm_d_sc::classify::{CandleClassifier, ClassifierRuntime, ServiceCore};
 use llm_d_sc::taxonomy::ClassifierDefinition;
 
 fn classifier(name: &str) -> CandleClassifier {
@@ -41,8 +39,12 @@ fn u110_metadata_reports_real_identity_not_fixtures() {
         ("tokenizer_revision", &meta.tokenizer_revision),
         ("taxonomy_revision", &meta.taxonomy_revision),
     ] {
-        for bad in ["sensitivity-synthetic", "synthetic-for-mechanics-only",
-                    "tokenizer-fixture", "synthetic-prototypes"] {
+        for bad in [
+            "sensitivity-synthetic",
+            "synthetic-for-mechanics-only",
+            "tokenizer-fixture",
+            "synthetic-prototypes",
+        ] {
             assert_ne!(
                 value, bad,
                 "{field} must not report the fixture value '{bad}' on the real path"
@@ -56,7 +58,10 @@ fn u110_metadata_reports_real_identity_not_fixtures() {
         .artifact_digest
         .as_deref()
         .expect("a classifier loaded from a ModelCar must carry its artifact digest");
-    assert!(digest.starts_with("blake3:"), "digest must name its algorithm: {digest}");
+    assert!(
+        digest.starts_with("blake3:"),
+        "digest must name its algorithm: {digest}"
+    );
 }
 
 /// U-111: two different taxonomies must not share a cache namespace.
@@ -94,7 +99,10 @@ fn u112_every_identity_component_participates_in_the_cache_key() {
     for (label, key) in [
         ("classifier_id", CacheKey::new("other", mo, tk, tx, text)),
         ("model/digest", CacheKey::new(c, "other", tk, tx, text)),
-        ("tokenizer_revision", CacheKey::new(c, mo, "other", tx, text)),
+        (
+            "tokenizer_revision",
+            CacheKey::new(c, mo, "other", tx, text),
+        ),
         ("taxonomy_revision", CacheKey::new(c, mo, tk, "other", text)),
     ] {
         assert_ne!(base, key, "changing {label} must change the cache key");

@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use llm_d_sc::classify::{
-    ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, RuntimeMetadata, ClassifyStatus,
-    RankedSignal,
+    ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, ClassifyStatus,
+    RankedSignal, RuntimeMetadata,
 };
 use llm_d_sc::handoff::InferenceExecutor;
 use llm_d_sc::metrics::Metrics;
@@ -72,9 +72,12 @@ fn i090_executor_workers_run_forwards_in_parallel() {
         peak: peak.clone(),
     };
 
-    let executor =
-        InferenceExecutor::spawn_with_workers(classifier, Metrics::new(), 32, WORKERS);
-    assert_eq!(executor.workers(), WORKERS, "configured width must be honoured");
+    let executor = InferenceExecutor::spawn_with_workers(classifier, Metrics::new(), 32, WORKERS);
+    assert_eq!(
+        executor.workers(),
+        WORKERS,
+        "configured width must be honoured"
+    );
 
     let started = Instant::now();
     let receivers: Vec<_> = (0..WORKERS)

@@ -183,8 +183,7 @@ fn i092_control_reconnecting_client_is_observed_as_multiple_accepts() {
     let addr = server.local_addr();
 
     for turn in 1..=3 {
-        let mut client =
-            ClassifyClient::connect(&addr).expect("each fresh client must connect");
+        let mut client = ClassifyClient::connect(&addr).expect("each fresh client must connect");
         client
             .classify(fixture_request(&format!("rc-{turn:04}"), "sess-rc"))
             .expect("turn must succeed");

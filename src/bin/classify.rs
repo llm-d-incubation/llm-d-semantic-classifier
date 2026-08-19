@@ -13,7 +13,7 @@
 use std::io::{BufRead, Write};
 use std::time::Instant;
 
-use llm_d_sc::classify::{ClassificationInput, ClassifierRuntime, CandleClassifier};
+use llm_d_sc::classify::{CandleClassifier, ClassificationInput, ClassifierRuntime};
 use llm_d_sc::taxonomy::{built_in_names, ClassifierDefinition, DEFAULT_CLASSIFIER};
 
 fn main() {
@@ -31,7 +31,9 @@ fn main() {
     }
 
     let flag = |name: &str| -> Option<String> {
-        argv.iter().position(|a| a == name).and_then(|i| argv.get(i + 1).cloned())
+        argv.iter()
+            .position(|a| a == name)
+            .and_then(|i| argv.get(i + 1).cloned())
     };
     let json_out = argv.iter().any(|a| a == "--json");
     let spec = flag("--classifier").unwrap_or_else(|| DEFAULT_CLASSIFIER.to_string());
@@ -47,8 +49,8 @@ fn main() {
     // A classifier definition names the model it was calibrated against, so the
     // default model directory follows the classifier rather than the other way
     // around. Mismatching them silently would produce confident nonsense.
-    let model_dir = flag("--model")
-        .unwrap_or_else(|| format!("artifacts/models/{}", definition.classifier_id));
+    let model_dir =
+        flag("--model").unwrap_or_else(|| format!("artifacts/models/{}", definition.classifier_id));
 
     // Positional text = every argument that is not a flag or a flag's value.
     let mut skip_next = false;
@@ -70,19 +72,20 @@ fn main() {
         .collect();
 
     let load_start = Instant::now();
-    let classifier =
-        match CandleClassifier::from_modelcar_with(std::path::Path::new(&model_dir), definition.clone())
-        {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!(
-                    "llm-d-sc-classify: could not load '{}' from {model_dir}: {e}\n\
+    let classifier = match CandleClassifier::from_modelcar_with(
+        std::path::Path::new(&model_dir),
+        definition.clone(),
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "llm-d-sc-classify: could not load '{}' from {model_dir}: {e}\n\
                      hint: ./hack/fetch-model --classifier {}",
-                    definition.classifier_id, definition.classifier_id
-                );
-                std::process::exit(1);
-            }
-        };
+                definition.classifier_id, definition.classifier_id
+            );
+            std::process::exit(1);
+        }
+    };
     let load_ms = load_start.elapsed().as_secs_f64() * 1000.0;
 
     if !json_out {
@@ -98,8 +101,12 @@ fn main() {
     let inputs: Vec<String> = if !text_args.is_empty() {
         vec![text_args.join(" ")]
     } else {
-        std::io::stdin().lock().lines().map_while(Result::ok)
-            .filter(|l| !l.trim().is_empty()).collect()
+        std::io::stdin()
+            .lock()
+            .lines()
+            .map_while(Result::ok)
+            .filter(|l| !l.trim().is_empty())
+            .collect()
     };
     if inputs.is_empty() {
         eprintln!("llm-d-sc-classify: no input text (pass text or pipe it on stdin)");
@@ -138,7 +145,11 @@ fn main() {
                     for (i, s) in r.ranked.iter().enumerate() {
                         // Bar is relative to the top score, so the shape of the
                         // ranking (decisive vs ambiguous) is visible at a glance.
-                        let frac = if top > 0.0 { (s.score / top).clamp(0.0, 1.0) } else { 0.0 };
+                        let frac = if top > 0.0 {
+                            (s.score / top).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
                         let bar = "#".repeat((frac * 24.0).round() as usize);
                         let mark = if i == 0 { "->" } else { "  " };
                         writeln!(out, "  {mark} {:<14} {:>6.3}  {bar}", s.id, s.score).ok();

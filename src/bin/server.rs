@@ -87,8 +87,16 @@ fn main() -> io::Result<()> {
                     "llm-d-sc metrics: served={served} hits={} misses={} | \
                      queue p50={:?} p99={:?} | tokenize p50={:?} p99={:?} | \
                      forward p50={:?} p99={:?} | total p50={:?} p99={:?}",
-                    snap.cache_hits, snap.cache_misses,
-                    q.p50, q.p99, t.p50, t.p99, f.p50, f.p99, tot.p50, tot.p99
+                    snap.cache_hits,
+                    snap.cache_misses,
+                    q.p50,
+                    q.p99,
+                    t.p50,
+                    t.p99,
+                    f.p50,
+                    f.p99,
+                    tot.p50,
+                    tot.p99
                 );
             }
         })

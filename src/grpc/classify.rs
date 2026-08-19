@@ -483,5 +483,4 @@ impl ClassifyClient {
         let response = self.runtime.block_on(client.classify(request))?;
         Ok(response.into_inner())
     }
-
 }

@@ -202,7 +202,11 @@ mod bounded_tests {
                 context: "c".into(),
             });
         }
-        let ids: Vec<String> = telemetry.trace_capture().into_iter().map(|e| e.request_id).collect();
+        let ids: Vec<String> = telemetry
+            .trace_capture()
+            .into_iter()
+            .map(|e| e.request_id)
+            .collect();
         assert_eq!(ids, vec!["req-7", "req-8", "req-9"]);
     }
 

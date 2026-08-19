@@ -34,7 +34,9 @@ fn percentile(sorted: &[u128], q: f64) -> f64 {
 fn main() {
     let target = arg("--target", "127.0.0.1:50051");
     let topology = arg("--topology", "unspecified");
-    let samples: usize = arg("--samples", "200").parse().expect("--samples must be a number");
+    let samples: usize = arg("--samples", "200")
+        .parse()
+        .expect("--samples must be a number");
 
     let mut client = match ClassifyClient::connect(&target) {
         Ok(c) => c,
@@ -68,22 +70,31 @@ fn main() {
     for i in 0..samples {
         let text = format!("distinct probe prompt {i} concerning an unrelated subject entirely");
         let t = Instant::now();
-        let r = client.classify(req(&format!("miss-{i}"), &text)).expect("miss must succeed");
+        let r = client
+            .classify(req(&format!("miss-{i}"), &text))
+            .expect("miss must succeed");
         miss.push(t.elapsed().as_micros());
         // The response must never carry a route: routing authority stays with
         // the caller (AC-010). Asserting it here makes the E2E topology runs
         // evidence for that contract too, not just for latency.
-        assert!(!r.ranked.is_empty(), "a served response must carry ranked signals");
+        assert!(
+            !r.ranked.is_empty(),
+            "a served response must carry ranked signals"
+        );
     }
 
     // HIT: identical text every time, so after the first the result is cached
     // and the sample measures the transport plus a cache lookup.
     let hit_text = "a single stable prompt served repeatedly from the result cache";
-    client.classify(req("hit-warm", hit_text)).expect("hit warm must succeed");
+    client
+        .classify(req("hit-warm", hit_text))
+        .expect("hit warm must succeed");
     let mut hit = Vec::with_capacity(samples);
     for i in 0..samples {
         let t = Instant::now();
-        client.classify(req(&format!("hit-{i}"), hit_text)).expect("hit must succeed");
+        client
+            .classify(req(&format!("hit-{i}"), hit_text))
+            .expect("hit must succeed");
         hit.push(t.elapsed().as_micros());
     }
 

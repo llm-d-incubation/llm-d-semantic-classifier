@@ -40,15 +40,17 @@ fn i072_served_response_carries_real_taxonomy_labels_and_revisions() {
     let expected_taxonomy = definition.taxonomy_revision.clone();
     let expected_model = definition.model_revision.clone();
 
-    let classifier =
-        CandleClassifier::from_modelcar_with(&model_dir("complexity"), definition)
-            .expect("real model + taxonomy must load");
+    let classifier = CandleClassifier::from_modelcar_with(&model_dir("complexity"), definition)
+        .expect("real model + taxonomy must load");
     let server =
         ClassifyServer::bind_with_classifier("127.0.0.1:0", classifier).expect("server must bind");
     let mut client = ClassifyClient::connect(server.local_addr()).expect("client must connect");
 
     let response = client
-        .classify(request("tax-0001", "Prove that the square root of two is irrational."))
+        .classify(request(
+            "tax-0001",
+            "Prove that the square root of two is irrational.",
+        ))
         .expect("classify must succeed");
 
     // Every returned label must be a declared label of the taxonomy, and every
@@ -63,7 +65,10 @@ fn i072_served_response_carries_real_taxonomy_labels_and_revisions() {
         "the served ranking must cover exactly the taxonomy's labels, not synthetic prototypes"
     );
     assert!(
-        !response.ranked.iter().any(|r| r.label.starts_with("proto-")),
+        !response
+            .ranked
+            .iter()
+            .any(|r| r.label.starts_with("proto-")),
         "synthetic prototype ids must never reach the wire"
     );
 
@@ -86,7 +91,9 @@ fn i072_served_response_carries_real_taxonomy_labels_and_revisions() {
 #[test]
 #[ignore]
 fn i073_served_ranking_is_semantically_correct() {
-    let definition = ClassifierDefinition::built_in("complexity").unwrap().unwrap();
+    let definition = ClassifierDefinition::built_in("complexity")
+        .unwrap()
+        .unwrap();
     let classifier =
         CandleClassifier::from_modelcar_with(&model_dir("complexity"), definition).unwrap();
     let server = ClassifyServer::bind_with_classifier("127.0.0.1:0", classifier).unwrap();
@@ -152,7 +159,10 @@ fn i074_custom_definition_from_path_is_served() {
     let mut client = ClassifyClient::connect(server.local_addr()).unwrap();
 
     let response = client
-        .classify(request("cust-0001", "my invoice was billed twice this month"))
+        .classify(request(
+            "cust-0001",
+            "my invoice was billed twice this month",
+        ))
         .expect("classify must succeed");
     assert_eq!(response.classifier_id, "support-desk");
     assert_eq!(response.taxonomy_revision, "custom-test-v1");

@@ -298,9 +298,12 @@ mod tests {
         // reported quantile must lie in ((1 - 1/8) * true, true].
         for (q, truth) in [(0.50, 500.0), (0.95, 950.0), (0.99, 990.0)] {
             let got = m.stage_percentiles(LatencyStage::Forward);
+            // Match on the quantile directly. A guard of the form `x if x == k`
+            // is just a pattern, and clippy is right that writing it as a guard
+            // hides that.
             let v = match q {
-                x if x == 0.50 => got.p50,
-                x if x == 0.95 => got.p95,
+                0.50 => got.p50,
+                0.95 => got.p95,
                 _ => got.p99,
             }
             .as_micros() as f64;

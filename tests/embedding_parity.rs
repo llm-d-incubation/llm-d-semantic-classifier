@@ -17,7 +17,11 @@ use llm_d_sc::embedding::Embedder;
 
 /// Cosine similarity between the Rust and Python vectors.
 fn cosine(a: &[f32], b: &[f32]) -> f64 {
-    let dot: f64 = a.iter().zip(b).map(|(x, y)| f64::from(*x) * f64::from(*y)).sum();
+    let dot: f64 = a
+        .iter()
+        .zip(b)
+        .map(|(x, y)| f64::from(*x) * f64::from(*y))
+        .sum();
     let na: f64 = a.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>().sqrt();
     let nb: f64 = b.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>().sqrt();
     dot / (na * nb)
@@ -57,7 +61,11 @@ fn i025_rust_embedding_agrees_with_pinned_python_reference() {
     .expect("reference fixture must be committed");
     let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
     let texts: Vec<String> = fixture["texts"]
-        .as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
 
     // Also assert the Rust output is unit-norm, since the comparison below
     // normalises both sides and would otherwise hide a missing Normalize module.
@@ -86,14 +94,23 @@ fn i025_rust_embedding_agrees_with_pinned_python_reference() {
 
         for (i, text) in texts.iter().enumerate() {
             let want: Vec<f32> = reference[i]
-                .as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_f64().unwrap() as f32)
+                .collect();
             let got = embedder.embed(text).expect("embed must succeed");
 
             assert_eq!(
-                got.len(), want.len(),
+                got.len(),
+                want.len(),
                 "{model}: dimension mismatch for \"{text}\""
             );
-            let rust_norm: f64 = got.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>().sqrt();
+            let rust_norm: f64 = got
+                .iter()
+                .map(|x| f64::from(*x).powi(2))
+                .sum::<f64>()
+                .sqrt();
             assert!(
                 (rust_norm - 1.0).abs() < 1e-3,
                 "{model}: the Rust embedding must be unit-norm (got {rust_norm:.6}); \
@@ -113,7 +130,9 @@ fn i025_rust_embedding_agrees_with_pinned_python_reference() {
                 &text[..text.len().min(60)]
             );
         }
-        println!("{model}: worst cosine {worst_cos:.6} on \"{}\"",
-                 &worst_text[..worst_text.len().min(50)]);
+        println!(
+            "{model}: worst cosine {worst_cos:.6} on \"{}\"",
+            &worst_text[..worst_text.len().min(50)]
+        );
     }
 }

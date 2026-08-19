@@ -179,7 +179,9 @@ impl RuntimeMetadata {
     pub fn cache_identity(&self) -> (&str, &str, &str, &str) {
         (
             &self.classifier_id,
-            self.artifact_digest.as_deref().unwrap_or(&self.model_revision),
+            self.artifact_digest
+                .as_deref()
+                .unwrap_or(&self.model_revision),
             &self.tokenizer_revision,
             &self.taxonomy_revision,
         )
