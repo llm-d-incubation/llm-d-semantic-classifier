@@ -48,6 +48,7 @@ Listed so the history is legible rather than quietly rewritten.
 | Was | Closed by |
 | --- | --- |
 | Model forward ran on a Tokio network worker | bounded handoff to a dedicated executor thread pool (`I-090`, with `I-091` as the serialisation control) |
+| Concurrency 4 raised miss latency roughly fourfold with no throughput gain | measured after the pool fix (`P-020`/`P-021`): 24 misses take 189.5 ms at width 1 and 44.3 ms at width 4, a 4.27x throughput gain, while forward p50 goes 7.68 ms to 7.17 ms. Added concurrency no longer costs latency |
 | Production path bypassed the result cache and metrics | the real path runs through the shared `ServiceCore` |
 | Classifier ranked against synthetic prototypes and reported synthetic revisions | artifact-backed classifier definitions with real anchors and revisions (`I-072`, `I-073`, `I-074`) |
 | Persistent-channel claim rested on a counter that was never incremented | the claim is now measured server-side by counting accepted TCP connections (`I-002`, with `I-092` as the control) |

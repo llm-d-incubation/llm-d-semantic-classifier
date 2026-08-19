@@ -7,8 +7,8 @@
   "U-005": "green"
  },
  "AC-002": {
-  "I-010": "pending",
-  "I-011": "pending",
+  "I-010": "green",
+  "I-011": "green",
   "S-006": "pending",
   "U-020": "green",
   "U-022": "green"
@@ -24,12 +24,12 @@
   "S-053": "pending"
  },
  "AC-004": {
-  "I-020": "pending",
-  "I-021": "pending",
-  "I-022": "pending",
-  "I-023": "pending",
-  "I-024": "pending",
-  "I-025": "pending",
+  "I-020": "green",
+  "I-021": "green",
+  "I-022": "green",
+  "I-023": "green",
+  "I-024": "green",
+  "I-025": "green",
   "U-060": "green",
   "U-061": "green",
   "U-062": "green",
@@ -40,17 +40,17 @@
   "U-067": "green"
  },
  "AC-005": {
-  "I-012": "pending",
+  "I-012": "green",
   "U-021": "green"
  },
  "AC-006": {
-  "I-030": "pending",
+  "I-030": "green",
   "P-001": "pending",
   "P-002": "pending",
   "U-040": "green"
  },
  "AC-007": {
-  "I-031": "pending",
+  "I-031": "green",
   "P-004": "pending",
   "U-041": "green"
  },
@@ -67,7 +67,7 @@
   "I-002": "green",
   "I-005": "green",
   "I-006": "green",
-  "I-008": "pending",
+  "I-008": "green",
   "S-001": "pending",
   "S-002": "pending",
   "U-011": "green"
