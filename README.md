@@ -37,7 +37,7 @@ types are planned (see [Project status](#project-status)).
 returns ranked, versioned evidence about a request. It is a **signal producer,
 not a decision maker**.
 
-![AI Gateway and llm-d-sc: the gateway performs routing and enforcement while llm-d-sc returns semantic classification signals. An incoming request enters the AI Gateway, which sends a classification request to llm-d-sc; llm-d-sc returns ranked semantic signals with confidence scores (the diagram shows the target set of domain, sensitivity, and complexity; release 0.1 serves domain), and the gateway then applies policy, session stickiness, guardrails, and fallback to select the final model.](docs/images/llm-d-sc-semantic-routing.png)
+![AI Gateway and llm-d-sc: the gateway performs routing and enforcement while llm-d-sc returns semantic classification signals. An incoming request enters the AI Gateway, which sends a classification request to llm-d-sc; llm-d-sc returns ranked semantic signals with confidence scores (the diagram shows the target set of domain, sensitivity, and complexity; release 0.1 serves prompt complexity), and the gateway then applies policy, session stickiness, guardrails, and fallback to select the final model.](docs/images/llm-d-sc-semantic-routing.png)
 
 > The payload above shows the target shape once several signal types are served
 > together. Release `0.1` serves a **generic domain classifier** and returns
@@ -71,53 +71,97 @@ versioning, and CPU/GPU scheduling to the data plane.
 Requires a Rust toolchain and `protoc`.
 
 **1. Materialise a classifier artifact** (ModelCar layout, mounted at `/models`
-in a container). The default is a generic multilingual ModernBERT domain
-classifier:
+in a container). This example uses the prompt-complexity classifier:
 
 ```bash
-./hack/fetch-model            # default: generic domain classifier
-./hack/fetch-model --list     # other classifiers, including custom ones
+./hack/fetch-model --classifier complexity
+./hack/fetch-model --list     # every available classifier
 ```
 
-**2. Run the service:**
+**2. Classify something.** The bundled CLI runs the same pipeline the service
+runs, without needing a server:
 
 ```bash
-LLM_D_SC_MODEL_DIR=./artifacts/models/intent \
+cargo run --release --bin llm-d-sc-classify -- \
+  "Prove by induction that the sum of the first n odd numbers is n squared."
+```
+
+```text
+classifier complexity (4 labels, 48 anchors, taxonomy scr-default-anchors-v1)  loaded in 555 ms
+
+  "Prove by induction that the sum of the first n odd numbers is n squared."
+  -> REASONING       1.000  ########################
+     COMPLEX        -0.232
+     MEDIUM         -0.372
+     SIMPLE         -0.400
+     margin 1.231   8.8 ms
+```
+
+A single-fact lookup ranks the other end of the taxonomy:
+
+```bash
+cargo run --release --bin llm-d-sc-classify -- "What is the capital of Portugal?"
+```
+
+```text
+  -> SIMPLE          1.000  ########################
+     MEDIUM         -0.074
+     COMPLEX        -0.228
+     REASONING      -0.403
+     margin 1.074   7.5 ms
+```
+
+`complexity` sorts prompts into `SIMPLE`, `MEDIUM`, `COMPLEX` and `REASONING`,
+so a caller can send a lookup to a small model and a proof to a large one. The
+signal is ranked evidence, never a destination.
+
+**3. Run the service:**
+
+```bash
+LLM_D_SC_MODEL_DIR=./artifacts/models/complexity \
+LLM_D_SC_CLASSIFIER=complexity \
 LLM_D_SC_LISTEN=0.0.0.0:50051 \
   cargo run --release --bin llm-d-sc-server
 ```
 
 ```text
-llm-d-sc: bound 0.0.0.0:50051; ModelCar dir ./artifacts/models/intent;
-READY (resident classifier loaded and warmed)
+llm-d-sc: bound 0.0.0.0:50051; ModelCar dir ./artifacts/models/complexity;
+READY (resident Candle classifier loaded and warmed)
 ```
 
 The service reports **not ready** until the artifact is validated, the model and
-tokenizer are loaded, and a warmup forward has succeeded, an orchestrator never
-routes traffic to a cold instance.
+tokenizer are loaded, and a warmup forward has succeeded, so an orchestrator
+never routes traffic to a cold instance.
 
-**3. Classify a request.** The bundled gateway stand-in issues a real gRPC call
-over a persistent channel, consumes the signals, and applies its own test-only
-policy afterwards, demonstrating that routing authority stays outside this
-service:
+`LLM_D_SC_CLASSIFIER` selects a taxonomy. It accepts a built-in name or a path
+to your own definition, and the model directory must match the classifier it was
+calibrated against. See [docs/classifiers.md](docs/classifiers.md).
+
+**4. Call it over gRPC.** The bundled gateway stand-in issues a real call over a
+persistent channel, consumes the signals, and applies its own test-only policy
+afterwards, demonstrating that routing authority stays outside this service:
 
 ```bash
 cargo test --release --test grpc -- --nocapture
 ```
 
-A response carries ranked signals and the revisions that produced them:
+A response carries ranked signals and the revisions that produced them, so any
+result can be reproduced exactly:
 
 ```text
 request_id:         "req-1"
-classifier_id:      "domain"
-model_revision:     "bf8d3833707d1bb8f9237260c271ca0d5982462d"
-tokenizer_revision: "bf8d3833707d1bb8f9237260c271ca0d5982462d"
-taxonomy_revision:  "mmbert-intent-14"
+classifier_id:      "complexity"
+model_revision:     "c5f55ef419d268ba843c544dc00988d1e9878044"
+taxonomy_revision:  "scr-default-anchors-v1"
 status:             OK
-ranked:             [ { label: "computer science", score: 0.71 },
-                      { label: "engineering",      score: 0.12 },
-                      { label: "math",             score: 0.05 } ]
+ranked:             [ { label: "SIMPLE",    score:  0.999 },
+                      { label: "MEDIUM",    score: -0.074 },
+                      { label: "COMPLEX",   score: -0.228 },
+                      { label: "REASONING", score: -0.403 } ]
 ```
+
+Every declared label is ranked, so a caller can read confidence from the margin
+between the top two rather than trusting a single answer.
 
 Verification and benchmarking:
 
@@ -177,11 +221,14 @@ Further reading: [`docs/architecture.md`](docs/architecture.md) ·
 
 ```text
 src/                 library crate: config, runtime, cache, handoff, gRPC, classify
-src/bin/             llm-d-sc-server, bench-runner
+src/bin/             llm-d-sc-server, llm-d-sc-classify, bench-runner,
+                     llm-d-sc-gateway-probe
+classifiers/         built-in taxonomy definitions (labels and anchors)
 proto/               the gRPC wire contract
 tests/               integration, parity, and benchmark-harness suites
 deploy/              Kubernetes manifests, ModelCar build
-hack/                verify, test-report, test-parity, spec-check, fetch-model
+hack/                verify, test-report, test-parity, spec-check, fetch-model,
+                     deploy-cluster, cluster-evidence, benchmark-report
 docs/                architecture, decisions (ADRs), condensed research,
                      benchmark results and methodology
 specs/               the design record, see below
