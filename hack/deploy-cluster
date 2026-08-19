@@ -34,8 +34,8 @@ oc -n "$NS" delete job llm-d-sc-topology-a llm-d-sc-topology-b-probe \
 
 for f in deploy/topology-b-clusterip.yaml deploy/topology-a-same-pod.yaml deploy/topology-b-probe.yaml; do
   [ -f "$f" ] || continue
-  sed -e "s|image-registry.openshift-image-registry.svc:5000/${NS}/llm-d-sc:latest|${SVC_IN}|g" \
-      -e "s|image-registry.openshift-image-registry.svc:5000/${NS}/llm-d-sc-modelcar:latest|${MC_IN}|g" \
+  sed -e "s|llm-d-sc/llm-d-sc-modelcar:latest|${MC_IN}|g" \
+      -e "s|llm-d-sc/llm-d-sc:latest|${SVC_IN}|g" \
       "$f" | oc -n "$NS" apply -f - >/dev/null
   echo "[deploy] applied $f (digest-pinned)"
 done

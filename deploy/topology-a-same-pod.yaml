@@ -6,6 +6,12 @@
 # that hangs forever: a plain second container would keep running after the
 # probe exits and the Job would never complete. As a sidecar, it is terminated
 # automatically once the probe finishes.
+# Images are written as vendor-neutral placeholders (`llm-d-sc/...:latest`).
+# They are rewritten to a concrete, DIGEST-PINNED reference at deploy time by
+# `hack/deploy-cluster`, which records what it resolved in
+# artifacts/deployed-digests.json. Hardcoding a cluster's internal registry here
+# would make these manifests unusable anywhere else and contradicts ADR-0004
+# (Kubernetes, not OpenShift); hardcoding a digest would make them unreadable.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -25,11 +31,11 @@ spec:
         # ModelCar: the artifact arrives as its own OCI image and is copied into
         # a shared volume. The service image contains no model.
         - name: modelcar
-          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc-modelcar:latest
+          image: llm-d-sc/llm-d-sc-modelcar:latest
           command: ["/bin/sh", "-c", "cp -R /models/. /shared/ && ls -la /shared"]
           volumeMounts: [{name: models, mountPath: /shared}]
         - name: llm-d-sc
-          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc:latest
+          image: llm-d-sc/llm-d-sc:latest
           restartPolicy: Always      # native sidecar
           env:
             - {name: LLM_D_SC_MODEL_DIR, value: /models}
@@ -47,7 +53,7 @@ spec:
             limits: {cpu: "4", memory: 4Gi}
       containers:
         - name: gateway-probe
-          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc:latest
+          image: llm-d-sc/llm-d-sc:latest
           command: ["/bin/sh", "-c"]
           args:
             - |

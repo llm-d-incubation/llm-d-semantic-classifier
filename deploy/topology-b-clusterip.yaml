@@ -3,6 +3,12 @@
 #
 # The only difference from Topology A is the network path, which is the point:
 # comparing the two isolates the cost of leaving the Pod.
+# Images are written as vendor-neutral placeholders (`llm-d-sc/...:latest`).
+# They are rewritten to a concrete, DIGEST-PINNED reference at deploy time by
+# `hack/deploy-cluster`, which records what it resolved in
+# artifacts/deployed-digests.json. Hardcoding a cluster's internal registry here
+# would make these manifests unusable anywhere else and contradicts ADR-0004
+# (Kubernetes, not OpenShift); hardcoding a digest would make them unreadable.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,12 +26,12 @@ spec:
           emptyDir: {}
       initContainers:
         - name: modelcar
-          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc-modelcar:latest
+          image: llm-d-sc/llm-d-sc-modelcar:latest
           command: ["/bin/sh", "-c", "cp -R /models/. /shared/"]
           volumeMounts: [{name: models, mountPath: /shared}]
       containers:
         - name: llm-d-sc
-          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc:latest
+          image: llm-d-sc/llm-d-sc:latest
           env:
             - {name: LLM_D_SC_MODEL_DIR, value: /models}
             - {name: LLM_D_SC_CLASSIFIER, value: complexity}

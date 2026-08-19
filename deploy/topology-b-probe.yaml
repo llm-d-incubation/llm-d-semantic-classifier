@@ -3,6 +3,12 @@
 #
 # Deliberately identical to the Topology A probe except for --target, so the
 # difference between the two result sets is the network path and nothing else.
+# Images are written as vendor-neutral placeholders (`llm-d-sc/...:latest`).
+# They are rewritten to a concrete, DIGEST-PINNED reference at deploy time by
+# `hack/deploy-cluster`, which records what it resolved in
+# artifacts/deployed-digests.json. Hardcoding a cluster's internal registry here
+# would make these manifests unusable anywhere else and contradicts ADR-0004
+# (Kubernetes, not OpenShift); hardcoding a digest would make them unreadable.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -15,7 +21,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: gateway-probe
-          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc:latest
+          image: llm-d-sc/llm-d-sc:latest
           command: ["/usr/local/bin/llm-d-sc-gateway-probe"]
           args: ["--target", "llm-d-sc.llm-d-sc.svc.cluster.local:50051",
                  "--topology", "clusterip", "--samples", "200"]

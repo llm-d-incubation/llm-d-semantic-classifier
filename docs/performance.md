@@ -69,11 +69,27 @@ cannot accidentally measure pre-warmed hits.
 | 256 tok | 1 | 49.65 ms | 51.72 ms | 54.12 ms | 56.30 ms | 59.57 ms | 20.0 req/s |
 | 256 tok | 4 | 199.73 ms | 206.86 ms | 216.20 ms | 228.16 ms | 239.72 ms | 19.9 req/s |
 
-**Known limitation visible in this data.** At concurrency 4, miss latency rises
-roughly four-fold while throughput does not improve. The inference executor
-currently runs a single worker, so concurrent misses serialise behind it. This is
-tracked as an open issue; the admission bound is working as designed, the
-executor width is not yet configurable.
+**Superseded.** The concurrency-4 rows above were measured against a
+single-threaded inference executor, which is why miss latency rose roughly
+four-fold with no throughput gain: the admission bound was working as designed,
+but the "pool" was one thread, so concurrent misses serialised behind it.
+
+That defect is fixed. The executor now runs a real worker pool (default 4,
+`LLM_D_SC_INFERENCE_WORKERS`). Re-measured with `P-020`/`P-021`:
+
+| Width | 24 concurrent misses | forward p50 | forward p99 |
+| --- | ---: | ---: | ---: |
+| 1 | 189.5 ms | 7.68 ms | 8.19 ms |
+| 4 | 44.3 ms | 7.17 ms | 7.68 ms |
+
+That is 4.27x throughput with no per-request latency penalty. The concurrency-4
+rows in the table above should be read as a historical record of the defect, not
+as current behaviour.
+
+Worker width is a LATENCY choice rather than a throughput knee. Measured at
+`P-023`, width 32 nearly doubles aggregate throughput again (80.3 ms for 64
+misses against 150.6 ms at width 4) while forward p99 degrades from 13.3 ms to
+65.5 ms, far past the sub-20ms budget. The default optimises the tail.
 
 ## Inference floor, classifier called directly
 
@@ -164,8 +180,40 @@ warmup and measurement counts) alongside the results.
 - Behaviour under pod CPU limits, which will differ substantially from an
   unconstrained host.
 - GPU backends.
-- Per-stage latency distributions. Stage timings are currently accumulated
-  totals rather than histograms, so queue, tokenise, and forward percentiles are
-  not yet available.
+- Calibrated confidence. Scores are cosine similarities against labelled
+  anchors, comparable within one response but not across models or taxonomies.
 - Saturation beyond concurrency 4, deadline expiry, and cancellation behaviour
   (phase 0.20 and 0.21).
+
+
+## Per-stage latency distribution
+
+Stage timings are recorded as bounded log-scale histograms, so queue, tokenise,
+forward, and total are available as percentiles rather than as accumulated
+totals. A mean cannot distinguish a service where every request takes 10 ms from
+one where 99% take 1 ms and 1% take 900 ms, which is why the earlier sum-only
+registry could not support a latency claim at all.
+
+Measured in-cluster over 126 served requests (60 cache hits, 66 misses):
+
+| Stage | p50 | p99 |
+| --- | ---: | ---: |
+| queue | 5 us | 15 us |
+| tokenize | 26 us | 128 us |
+| model forward | 7.68 ms | 20.48 ms |
+| total, end to end | 6.66 ms | 11.26 ms |
+
+`total` p50 sits below `forward` p50 because total covers every request while
+forward covers only misses; with roughly half the traffic served from cache the
+total median lands just inside the miss population.
+
+**Everything that is not the model is under one percent of latency.** Queue and
+tokenise together are about 31 microseconds, and the ClusterIP network hop adds
+about 22 microseconds, against a 7.68 millisecond forward. Optimisation effort
+belongs in the model, the quantisation, and the hardware. Admission control is
+effectively free rather than a latency trade for safety under load.
+
+An earlier revision of this measurement was published with `Total` started after
+the executor dequeued the job, which excluded the queue wait it claimed to cover,
+and with `Queue` written from two places into one histogram. The figures above
+come from the corrected accounting.

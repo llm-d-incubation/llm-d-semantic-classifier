@@ -7,12 +7,20 @@ across the README, specs, and commit messages.
 The machine-checked view is `./hack/spec-check 0.1-mvp`, which reports every
 acceptance criterion, every required test ID, and its execution status.
 
+## Contract
+
+| Gap | Impact | Phase |
+| --- | --- | --- |
+| Abstention is never emitted | `ABSTAIN` is defined in the wire contract so callers can handle it from the start and it never becomes a breaking addition, but the serving path returns `OK` or an explicit error. Deciding when insufficient context warrants abstaining, and proving it, is open work | 0.22 |
+| Scores are similarities, not calibrated probabilities | ranked scores are cosine similarities against labelled anchors. They are comparable within one response, which makes the margin between the top two meaningful, but not across models or taxonomies, and should not be read as statistical confidence | 0.21 |
+| Result cache eviction is FIFO | the cache is bounded (50k entries) so memory is finite, but eviction is insertion-order rather than least-recently-used. FIFO was chosen because it bounds memory at one push and one pop per insert, while LRU needs recency bookkeeping on every hit and a hit is 632 nanoseconds | 0.22 |
+
 ## Capability
 
 | Gap | Impact | Phase |
 | --- | --- | --- |
-| Cost classification is anchors-only | `cost` has no fine-tuned model of its own and runs on a general-purpose embedder; measured accuracy trails the fine-tuned classifiers. A dedicated fine-tune is the tracked fix | 0.2 |
-| Default artifact and serving backend differ | `hack/fetch-model` pulls the generic ModernBERT sequence classifier by default, while the serving path currently implements the embedding-and-ranking backend. Sequence-classification serving, and regenerated parity fixtures and benchmarks for it, land before that artifact is served end to end | 0.1 fix |
+| Cost accuracy trails the other signals | `cost` is now fine-tuned (0.833 held-out, up from 0.750 on a general-purpose embedder) but remains the weakest of the three. Cross-model label verification discarded 34% of its synthetic corpus for disagreement, against far less for complexity, which says the tiers are genuinely more ambiguous rather than merely under-trained | 0.2 |
+| No generic domain classification | the ModernBERT domain classifier is a SEQUENCE-classification model and the 0.1 backend ranks embeddings against anchors, so it cannot serve one. It is deliberately not offered by `hack/fetch-model`: fetching an artifact the runtime cannot rank against produces confident nonsense rather than an error. Needs a sequence-classification runtime adapter | 0.25 |
 | No BUILT-IN custom domain classifiers | routing by business function (sales, shipping, finance, support) requires supplying your own definition. The mechanism works and is documented in [classifiers.md](classifiers.md), but no business-domain taxonomy ships by default | 0.4 |
 | Single classifier per service instance | no registry, no per-classifier queues or lanes | 0.23 |
 | No classifier revision swap | changing a classifier revision requires a restart; no canary or rollback | 0.24, 0.41 |
@@ -31,7 +39,7 @@ acceptance criterion, every required test ID, and its execution status.
 | Gap | Impact | Phase |
 | --- | --- | --- |
 | Stage percentiles are bucketed approximations | per-stage p50/p95/p99 are now recorded in fixed log-scale histograms; a reported quantile is within 12.5% of the true sample and buckets report their lower bound | 0.2 |
-| No metrics export | no Prometheus or OpenTelemetry endpoint yet | 0.3 |
+| No metrics export | no Prometheus or OpenTelemetry endpoint yet. Per-stage percentiles are logged to stderr on an interval as an interim measure | 0.3 |
 
 ## Validation
 
