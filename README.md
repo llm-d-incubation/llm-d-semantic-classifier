@@ -1,4 +1,4 @@
-# llm-d-semantic-classifier
+# llm-d-sc
 
 **Semantic classification for inference routing.** A low-latency Rust service
 that turns an incoming request into calibrated semantic signals so an AI Gateway
@@ -9,8 +9,9 @@ types are planned (see [Project status](#project-status)).
 [![llm-d incubation](https://img.shields.io/badge/llm--d-incubation-5B2C8D.svg)](https://github.com/llm-d-incubation)
 [![Slack](https://img.shields.io/badge/Slack-%23sig--semantic--classifier-4A154B.svg?logo=slack)](https://llm-d.ai/slack)
 
-> **Incubating, pre-1.0.** llm-d-semantic-classifier (`llm-d-sc`) lives in the
-> [llm-d-incubation](https://github.com/llm-d-incubation) organization, where new
+> **Incubating, pre-1.0.** `llm-d-sc` (the llm-d-semantic-classifier repository)
+> lives in the [llm-d-incubation](https://github.com/llm-d-incubation)
+> organization, where new
 > llm-d components are developed before graduation. APIs, configuration, and the
 > wire contract may change between `0.x` releases. See
 > [Project status](#project-status) for what is proven today and what is tracked
