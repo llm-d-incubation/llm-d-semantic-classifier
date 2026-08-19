@@ -41,21 +41,16 @@ not a decision maker**.
 ![AI Gateway and llm-d-sc: the gateway performs routing and enforcement while llm-d-sc returns semantic classification signals. An incoming request enters the AI Gateway, which sends a classification request to llm-d-sc; llm-d-sc returns ranked semantic signals with confidence scores (the diagram shows the target set of domain, sensitivity, and complexity; release 0.1 serves prompt complexity), and the gateway then applies policy, session stickiness, guardrails, and fallback to select the final model.](docs/images/llm-d-sc-semantic-routing.png)
 
 > The payload above shows the target shape once several signal types are served
-> together. Release `0.1` serves **one signal per instance**, returning ranked
-> labels with the classifier, model, tokenizer, and taxonomy revisions that
-> produced them. Three taxonomies ship built in (`complexity`, `cost`,
-> `sensitivity`) and a custom one can be supplied without rebuilding. Generic
-> domain classification needs a sequence-classification runtime adapter and is
-> tracked as the next signal; returning several signals in one response arrives
-> in a later phase.
+> together. Release `0.1` serves one signal per instance, returning ranked labels
+> with the classifier, model, tokenizer, and taxonomy revisions that produced
+> them. Three taxonomies ship built in (`complexity`, `cost`, `sensitivity`), and
+> a custom one can be supplied without rebuilding.
 
 ![llm-d-sc: what it IS and what it isn't. llm-d-sc IS a semantic classifier runtime service that executes classifiers to produce signals about a request; built for speed with a long-lived Rust service, resident models, caching and warmup; a pluggable runtime architecture with Candle as the first backend and others such as ONNX or vLLM possible later; a signal producer rather than a decision maker, returning ranked signals with confidence while routing decisions are made by the AI Gateway; safe by design, able to abstain when context is insufficient rather than guess; and observable, exposing metrics for latency, confidence, abstention and cache behaviour. llm-d-sc is NOT a router (it does not choose models or endpoints or apply policy; that is the AI Gateway), not a policy or guardrail engine, not a session or state authority (routing state, stickiness and fallback belong to the AI Gateway), not a general-purpose LLM platform, not a training platform, and not a model lifecycle or management system.](docs/images/llm-d-sc-is-and-isnt.png)
 
-One caveat on the graphic: **abstention is defined in the wire contract but is
-not yet emitted by the serving path.** `ABSTAIN` exists as a status so callers
-can handle it from the start and so it never becomes a breaking addition, but
-release `0.1` returns `OK` or an explicit error. Emitting it on insufficient
-context is tracked in [`docs/known-gaps.md`](docs/known-gaps.md).
+The graphic describes the capability set llm-d-sc is built for. Delivery is
+phased, and [Project status](#project-status) says which version each part lands
+in.
 
 Routing, policy, session authority, and organisation-wide model lifecycle belong
 to the gateway and its control plane. The wire contract enforces the boundary:
