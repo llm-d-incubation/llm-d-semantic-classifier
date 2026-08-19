@@ -9,7 +9,7 @@
 # classify against a real taxonomy with no external file. A custom definition can
 # still be supplied at runtime by pointing LLM_D_SC_CLASSIFIER at a path.
 
-FROM rust:1-slim AS builder
+FROM rust:1-bookworm AS builder
 RUN apt-get update \
  && apt-get install -y --no-install-recommends protobuf-compiler build-essential \
  && rm -rf /var/lib/apt/lists/*
@@ -21,7 +21,22 @@ RUN cargo build --release \
       --bin llm-d-sc-classify \
       --bin llm-d-sc-gateway-probe
 
-FROM registry.access.redhat.com/ubi9/ubi-minimal AS runtime
+# Runtime base MUST match the builder's glibc. The previous pairing was
+# `rust:1-slim` (current Debian, glibc 2.39+) against ubi9/ubi-minimal
+# (glibc 2.34), which produces an image that builds and pushes cleanly and then
+# dies instantly with:
+#   /usr/local/bin/llm-d-sc: /lib64/libc.so.6: version `GLIBC_2.39' not found
+# A successful build proves nothing about a dynamically linked binary, because
+# the build never executes it. Both stages are pinned to bookworm so the glibc
+# the binary is linked against is the glibc it runs on.
+#
+# FOLLOW-UP: a Red Hat project should ship a UBI runtime. That needs a UBI-based
+# Rust builder (ubi9/rust-toolset) or a static musl build, and is tracked
+# separately rather than blocking the topology evidence.
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 ENV LLM_D_SC_LISTEN=0.0.0.0:50051 \
     LLM_D_SC_MODEL_DIR=/models \
     LLM_D_SC_CLASSIFIER=complexity

@@ -1,0 +1,52 @@
+# Topology B (HOMELAB.md): dummy AI Gateway and llm-d-sc in SEPARATE Pods,
+# reached over a ClusterIP Service. Evidence for S-002, P-032, P-033.
+#
+# The only difference from Topology A is the network path, which is the point:
+# comparing the two isolates the cost of leaving the Pod.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-d-sc
+  namespace: llm-d-sc
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: llm-d-sc}}
+  template:
+    metadata:
+      labels: {app: llm-d-sc}
+    spec:
+      volumes:
+        - name: models
+          emptyDir: {}
+      initContainers:
+        - name: modelcar
+          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc-modelcar:latest
+          command: ["/bin/sh", "-c", "cp -R /models/. /shared/"]
+          volumeMounts: [{name: models, mountPath: /shared}]
+      containers:
+        - name: llm-d-sc
+          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc:latest
+          env:
+            - {name: LLM_D_SC_MODEL_DIR, value: /models}
+            - {name: LLM_D_SC_CLASSIFIER, value: complexity}
+            - {name: LLM_D_SC_LISTEN, value: "0.0.0.0:50051"}
+          ports: [{containerPort: 50051, name: grpc}]
+          volumeMounts: [{name: models, mountPath: /models}]
+          # S-006: readiness must block traffic until the model is warm. The
+          # Service only adds the Pod as an endpoint once this passes.
+          readinessProbe:
+            tcpSocket: {port: 50051}
+            initialDelaySeconds: 3
+            periodSeconds: 2
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {cpu: "4", memory: 4Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-d-sc
+  namespace: llm-d-sc
+spec:
+  selector: {app: llm-d-sc}
+  ports: [{name: grpc, port: 50051, targetPort: 50051}]

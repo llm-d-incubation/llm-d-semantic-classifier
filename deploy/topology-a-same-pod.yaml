@@ -1,0 +1,59 @@
+# Topology A (HOMELAB.md): dummy AI Gateway and llm-d-sc in the SAME Pod,
+# talking over 127.0.0.1. Evidence for S-001, P-030, P-031.
+#
+# llm-d-sc runs as a NATIVE SIDECAR (an initContainer with restartPolicy:
+# Always, Kubernetes 1.29+). That is what makes this a Job rather than a Pod
+# that hangs forever: a plain second container would keep running after the
+# probe exits and the Job would never complete. As a sidecar, it is terminated
+# automatically once the probe finishes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: llm-d-sc-topology-a
+  namespace: llm-d-sc
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: {app: llm-d-sc-topology-a}
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: models
+          emptyDir: {}
+      initContainers:
+        # ModelCar: the artifact arrives as its own OCI image and is copied into
+        # a shared volume. The service image contains no model.
+        - name: modelcar
+          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc-modelcar:latest
+          command: ["/bin/sh", "-c", "cp -R /models/. /shared/ && ls -la /shared"]
+          volumeMounts: [{name: models, mountPath: /shared}]
+        - name: llm-d-sc
+          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc:latest
+          restartPolicy: Always      # native sidecar
+          env:
+            - {name: LLM_D_SC_MODEL_DIR, value: /models}
+            - {name: LLM_D_SC_CLASSIFIER, value: complexity}
+            - {name: LLM_D_SC_LISTEN, value: "127.0.0.1:50051"}
+          volumeMounts: [{name: models, mountPath: /models}]
+          # No HTTP health endpoint exists yet (tracked gap), so readiness is a
+          # TCP check: the listener only binds after load and warmup succeed.
+          readinessProbe:
+            tcpSocket: {port: 50051}
+            initialDelaySeconds: 3
+            periodSeconds: 2
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {cpu: "4", memory: 4Gi}
+      containers:
+        - name: gateway-probe
+          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              until /usr/local/bin/llm-d-sc-gateway-probe --target 127.0.0.1:50051 \
+                    --topology same-pod --samples 200; do
+                echo "waiting for the sidecar to become ready..."; sleep 3
+              done
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}
