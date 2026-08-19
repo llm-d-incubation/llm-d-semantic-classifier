@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Deploy llm-d-sc to a namespace with both images pinned BY DIGEST.
+#
+# The manifests in deploy/ carry a mutable :latest reference so they stay
+# readable and reviewable. Digest pinning is resolved HERE, at deploy time, from
+# the tag you intend to ship, and the resolved digests are recorded in
+# artifacts/deployed-digests.json. That is the only way a served classification
+# can be traced to specific bytes (S-051): a tag can move under a restart, and
+# the pod would come back as something else with no record of the change.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+NS=${NS:-llm-d-sc}
+mkdir -p artifacts
+
+resolve() { # istag -> full digest reference
+  oc -n "$NS" get istag "$1" -o jsonpath='{.image.dockerImageReference}' 2>/dev/null
+}
+SVC=$(resolve llm-d-sc:latest)
+MC=$(resolve llm-d-sc-modelcar:latest)
+[ -n "$SVC" ] && [ -n "$MC" ] || { echo "cannot resolve image digests in $NS" >&2; exit 1; }
+echo "[deploy] service  $SVC"
+echo "[deploy] modelcar $MC"
+
+# The internal registry hostname differs between the pull path and the istag
+# reference, so normalise to the in-cluster service address.
+SVC_IN="image-registry.openshift-image-registry.svc:5000/${NS}/llm-d-sc@${SVC##*@}"
+MC_IN="image-registry.openshift-image-registry.svc:5000/${NS}/llm-d-sc-modelcar@${MC##*@}"
+
+# Job pod templates are IMMUTABLE, so an existing Job cannot be re-applied with a
+# new digest -- it must be replaced. Deleting first keeps this script idempotent
+# instead of failing on the second run.
+oc -n "$NS" delete job llm-d-sc-topology-a llm-d-sc-topology-b-probe \
+  --ignore-not-found --wait=true >/dev/null 2>&1 || true
+
+for f in deploy/topology-b-clusterip.yaml deploy/topology-a-same-pod.yaml deploy/topology-b-probe.yaml; do
+  [ -f "$f" ] || continue
+  sed -e "s|image-registry.openshift-image-registry.svc:5000/${NS}/llm-d-sc:latest|${SVC_IN}|g" \
+      -e "s|image-registry.openshift-image-registry.svc:5000/${NS}/llm-d-sc-modelcar:latest|${MC_IN}|g" \
+      "$f" | oc -n "$NS" apply -f - >/dev/null
+  echo "[deploy] applied $f (digest-pinned)"
+done
+
+python3 - "$SVC_IN" "$MC_IN" <<'PY'
+import json, sys
+svc, mc = sys.argv[1:3]
+json.dump({"service_image": svc, "modelcar_image": mc},
+          open("artifacts/deployed-digests.json", "w"), indent=2)
+print("[deploy] recorded artifacts/deployed-digests.json")
+PY
+oc -n "$NS" rollout status deploy/llm-d-sc --timeout=300s

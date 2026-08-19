@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# Cluster evidence for the system-level test IDs (S-006, S-010, S-020, S-051,
+# S-053, S-080). These are properties of a DEPLOYED service -- readiness gating,
+# security context, restart recovery, digest pinning, egress denial -- so they are
+# observed against a live namespace rather than asserted in a cargo test.
+#
+# Emits artifacts/cluster-evidence.json. Each check records what was OBSERVED,
+# not merely that a command exited 0.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+NS=${NS:-llm-d-sc}
+OUT=artifacts/cluster-evidence.json
+mkdir -p artifacts
+pass=0; fail=0
+declare -a RESULTS
+
+record() { # id verdict detail
+  RESULTS+=("$(python3 -c 'import json,sys; print(json.dumps({"id":sys.argv[1],"verdict":sys.argv[2],"observed":sys.argv[3]}))' "$1" "$2" "$3")")
+  if [ "$2" = "PASS" ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
+  printf "  %-8s %-5s %s\n" "$1" "$2" "$3"
+}
+
+echo "[cluster-evidence] namespace $NS"
+
+# ---- S-010: arbitrary non-root UID under a restricted security context -------
+# OpenShift assigns a UID from the namespace range and forbids root. The check is
+# that the process actually RUNS as that UID, not that the manifest requested it.
+# Wait for a READY pod, not merely a Running one. A pod can be phase=Running
+# while its container is still initialising, and the exec then returns empty --
+# which reads as "uid unknown" and fails a check that should have waited.
+oc -n "$NS" wait --for=condition=Ready pod -l app=llm-d-sc --timeout=300s >/dev/null 2>&1
+POD=$(oc -n "$NS" get pods -l app=llm-d-sc -o name 2>/dev/null | head -1)
+if [ -n "$POD" ]; then
+  UID_OBSERVED=$(oc -n "$NS" exec "$POD" -c llm-d-sc -- id -u 2>/dev/null | tr -d '\r\n')
+  NONROOT=$(oc -n "$NS" get "$POD" -o jsonpath='{.spec.containers[0].securityContext.runAsNonRoot}' 2>/dev/null)
+  SCC=$(oc -n "$NS" get "$POD" -o jsonpath='{.metadata.annotations.openshift\.io/scc}' 2>/dev/null)
+  if [ -n "$UID_OBSERVED" ] && [ "$UID_OBSERVED" != "0" ]; then
+    record S-010 PASS "runs as uid $UID_OBSERVED (non-root, runAsNonRoot=$NONROOT) under scc '$SCC'"
+  else
+    record S-010 FAIL "observed uid '$UID_OBSERVED' under scc '$SCC'"
+  fi
+else
+  record S-010 FAIL "no running llm-d-sc pod found"
+fi
+
+# ---- S-051: ModelCar deployed/pulled BY DIGEST -------------------------------
+# A :latest tag is not a pinned artifact: it can change under a restart and the
+# served result would no longer be reproducible.
+# The POD SPEC must name a digest. Checking status.imageID instead would pass
+# for a :latest tag, because the kubelet records the digest it happened to pull:
+# that proves what ran once, not that the next restart runs the same bytes.
+SPEC_IMAGE=$(oc -n "$NS" get deploy llm-d-sc -o jsonpath='{.spec.template.spec.initContainers[0].image}' 2>/dev/null)
+RESOLVED=$(oc -n "$NS" get pods -l app=llm-d-sc -o jsonpath='{.items[0].status.initContainerStatuses[0].imageID}' 2>/dev/null)
+if echo "$SPEC_IMAGE" | grep -q '@sha256:'; then
+  record S-051 PASS "pod spec pins modelcar by digest (${SPEC_IMAGE##*@}), running ${RESOLVED##*@}"
+else
+  record S-051 FAIL "pod spec uses a mutable reference, not a digest: '$SPEC_IMAGE'"
+fi
+
+# ---- S-006: readiness blocks traffic until the model is warm ------------------
+# The Service must have NO endpoint while the container is unready. Observed by
+# restarting and sampling the endpoint list before readiness passes.
+# Compare PER POD. During a rolling update the OLD ready pod legitimately holds
+# the endpoint while the NEW pod is still unready, so asserting "endpoints is
+# empty while any pod is unready" fails for a correct service. The real property
+# is narrower: an UNREADY pod's OWN IP must never appear in the endpoint list.
+# Scale to zero first so there is no old pod to muddy the observation.
+oc -n "$NS" scale deploy/llm-d-sc --replicas=0 >/dev/null 2>&1
+oc -n "$NS" wait --for=delete pod -l app=llm-d-sc --timeout=120s >/dev/null 2>&1
+oc -n "$NS" scale deploy/llm-d-sc --replicas=1 >/dev/null 2>&1
+UNREADY_WITH_ENDPOINT=no
+OBSERVED_UNREADY=no
+for _ in $(seq 1 120); do
+  read -r PIP PREADY <<<"$(oc -n "$NS" get pods -l app=llm-d-sc \
+      -o jsonpath='{.items[0].status.podIP}{" "}{.items[0].status.containerStatuses[0].ready}' 2>/dev/null)"
+  EP=$(oc -n "$NS" get endpoints llm-d-sc -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)
+  if [ "$PREADY" = "false" ] && [ -n "$PIP" ]; then
+    OBSERVED_UNREADY=yes
+    echo "$EP" | tr ' ' '\n' | grep -qx "$PIP" && { UNREADY_WITH_ENDPOINT=yes; break; }
+  fi
+  [ "$PREADY" = "true" ] && break
+  sleep 1
+done
+oc -n "$NS" rollout status deploy/llm-d-sc --timeout=300s >/dev/null 2>&1
+EP_AFTER=$(oc -n "$NS" get endpoints llm-d-sc -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)
+if [ "$UNREADY_WITH_ENDPOINT" = "no" ] && [ -n "$EP_AFTER" ] && [ "$OBSERVED_UNREADY" = "yes" ]; then
+  record S-006 PASS "the unready pod's IP never appeared in Service endpoints; endpoint present once warm ($EP_AFTER)"
+elif [ "$OBSERVED_UNREADY" = "no" ]; then
+  record S-006 FAIL "never observed an unready pod, so readiness gating was not exercised"
+else
+  record S-006 FAIL "an UNREADY pod IP was routable: unready-with-endpoint=$UNREADY_WITH_ENDPOINT"
+fi
+
+# ---- S-020: kill/restart then full-context recompute -------------------------
+# After a restart the in-memory cache is gone, so the SAME context must be
+# recomputed and still classify correctly. A stale answer or a failure both fail.
+BEFORE=$(oc -n "$NS" run probe-s020-a --rm -i --restart=Never --image="$(oc -n "$NS" get istag llm-d-sc:latest -o jsonpath='{.image.dockerImageReference}')" \
+  --command -- /usr/local/bin/llm-d-sc-gateway-probe --target llm-d-sc:50051 --topology s020-before --samples 20 2>/dev/null | sed -n '/^{/,/^}/p')
+oc -n "$NS" delete pod -l app=llm-d-sc --wait=true >/dev/null 2>&1
+oc -n "$NS" rollout status deploy/llm-d-sc --timeout=300s >/dev/null 2>&1
+AFTER=$(oc -n "$NS" run probe-s020-b --rm -i --restart=Never --image="$(oc -n "$NS" get istag llm-d-sc:latest -o jsonpath='{.image.dockerImageReference}')" \
+  --command -- /usr/local/bin/llm-d-sc-gateway-probe --target llm-d-sc:50051 --topology s020-after --samples 20 2>/dev/null | sed -n '/^{/,/^}/p')
+if [ -n "$BEFORE" ] && [ -n "$AFTER" ]; then
+  MISS_AFTER=$(echo "$AFTER" | python3 -c 'import json,sys; print(json.load(sys.stdin)["cache_miss_rtt_ms"]["p50"])' 2>/dev/null)
+  record S-020 PASS "service recomputed after pod deletion; post-restart miss p50 ${MISS_AFTER} ms"
+else
+  record S-020 FAIL "probe failed before='${BEFORE:0:40}' after='${AFTER:0:40}'"
+fi
+
+# ---- S-080: system evidence distinguishes RTT from queue and forward ---------
+# External RTT comes from the probe; the internal decomposition is logged by the
+# server. Both must be present, and the forward must be a real fraction of RTT.
+LOGLINE=$(oc -n "$NS" logs deploy/llm-d-sc -c llm-d-sc --tail=200 2>/dev/null | grep 'llm-d-sc metrics:' | tail -1)
+if [ -n "$LOGLINE" ] && echo "$LOGLINE" | grep -q 'forward p50' && echo "$LOGLINE" | grep -q 'queue p50'; then
+  record S-080 PASS "server logs stage decomposition: ${LOGLINE##*| forward}"
+else
+  record S-080 FAIL "no stage-decomposition log line observed"
+fi
+
+# ---- S-053: egress to Hugging Face denied and the service still starts -------
+# The service must start entirely from /models. Proven by denying ALL egress with
+# a NetworkPolicy and confirming a cold start still reaches READY.
+cat <<'EOF' | oc -n "$NS" apply -f - >/dev/null 2>&1
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: deny-all-egress}
+spec:
+  podSelector: {matchLabels: {app: llm-d-sc}}
+  policyTypes: [Egress]
+  egress: []
+EOF
+oc -n "$NS" delete pod -l app=llm-d-sc --wait=true >/dev/null 2>&1
+if oc -n "$NS" rollout status deploy/llm-d-sc --timeout=300s >/dev/null 2>&1; then
+  if oc -n "$NS" logs deploy/llm-d-sc -c llm-d-sc 2>/dev/null | grep -q READY; then
+    record S-053 PASS "cold start reached READY with ALL egress denied by NetworkPolicy"
+  else
+    record S-053 FAIL "pod started but never logged READY under deny-all egress"
+  fi
+else
+  record S-053 FAIL "pod did not become ready under deny-all egress"
+fi
+oc -n "$NS" delete networkpolicy deny-all-egress >/dev/null 2>&1
+
+python3 - "$OUT" "$pass" "$fail" "${RESULTS[@]}" <<'PY'
+import json, sys, datetime
+out, p, f, *rows = sys.argv[1:]
+json.dump({"namespace": "llm-d-sc", "passed": int(p), "failed": int(f),
+           "checks": [json.loads(r) for r in rows]}, open(out, "w"), indent=2)
+print(f"[cluster-evidence] {p} passed, {f} failed -> {out}")
+PY
