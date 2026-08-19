@@ -153,3 +153,68 @@ fn i063_service_starts_from_artifact_with_hf_egress_disabled() {
     }
     std::fs::remove_dir_all(&empty_cache).ok();
 }
+
+/// I-061: the artifact must be readable by an ARBITRARY non-root UID.
+///
+/// OpenShift assigns a random UID from the namespace range and never root, and
+/// that UID is in no group that owns the mount. So the only permission bits that
+/// matter are the OTHER bits: files need o+r and every directory on the path
+/// needs o+x to be traversable. An artifact that is readable only by its owner
+/// works on a developer laptop and fails in the cluster with a permission error
+/// at warmup, which is the worst place to discover it.
+///
+/// This checks the permission bits directly rather than dropping privileges,
+/// because a test process cannot setuid to an arbitrary UID without root.
+#[test]
+#[ignore]
+#[cfg(unix)]
+fn i061_artifact_readable_by_arbitrary_non_root_uid() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = model_dir("complexity");
+
+    // Every directory from the model dir down must be traversable by others.
+    let mut dirs = vec![dir.clone()];
+    for f in MODELCAR_REQUIRED_FILES {
+        if let Some(parent) = dir.join(f).parent() {
+            if parent != dir {
+                dirs.push(parent.to_path_buf());
+            }
+        }
+    }
+    for d in &dirs {
+        let mode = std::fs::metadata(d).unwrap().permissions().mode();
+        assert!(
+            mode & 0o001 != 0,
+            "{} has mode {:o}; an arbitrary UID cannot traverse it (needs o+x)",
+            d.display(),
+            mode & 0o777
+        );
+        assert!(
+            mode & 0o004 != 0,
+            "{} has mode {:o}; an arbitrary UID cannot list it (needs o+r)",
+            d.display(),
+            mode & 0o777
+        );
+    }
+
+    for f in MODELCAR_REQUIRED_FILES {
+        let path = dir.join(f);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert!(
+            mode & 0o004 != 0,
+            "{} has mode {:o}; an arbitrary non-root UID cannot read it (needs o+r)",
+            path.display(),
+            mode & 0o777
+        );
+        // Weights must never be writable by others: a mount that any UID can
+        // rewrite makes the I-062 digest meaningless.
+        assert!(
+            mode & 0o002 == 0,
+            "{} has mode {:o} and is world-WRITABLE; the artifact must be read-only \
+             to arbitrary UIDs or its digest guarantees nothing",
+            path.display(),
+            mode & 0o777
+        );
+    }
+}
