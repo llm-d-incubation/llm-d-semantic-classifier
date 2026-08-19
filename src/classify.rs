@@ -141,6 +141,49 @@ impl std::error::Error for ClassifyError {}
 pub trait ClassifierRuntime {
     /// Classify `input`, returning ranked semantic signals or an explicit error.
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError>;
+
+    /// The immutable identity of what this runtime actually loaded.
+    ///
+    /// Everything that needs to know WHICH classifier is resident previously
+    /// guessed: the gRPC surface hardcoded a signal name, the cache keyed on
+    /// module constants, and results reported fixture revisions. Each of those
+    /// was independently wrong in the same way, because the information only
+    /// existed inside the backend and was never exposed. A runtime that can
+    /// describe itself fixes all of them at once, and makes a second backend
+    /// possible without teaching every caller about it.
+    fn metadata(&self) -> RuntimeMetadata;
+}
+
+/// The immutable identity of a loaded classifier.
+///
+/// `artifact_digest` is content-derived (see [`crate::runtime::modelcar_digest`])
+/// while the revisions are declared. Both are carried because they answer
+/// different questions: the revision says what was REQUESTED, the digest says
+/// what was actually loaded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeMetadata {
+    pub classifier_id: String,
+    /// The signal this runtime produces, for example `complexity`.
+    pub signal: String,
+    pub model_revision: String,
+    pub tokenizer_revision: String,
+    pub taxonomy_revision: String,
+    /// Content digest of the resident artifact, when it was loaded from one.
+    pub artifact_digest: Option<String>,
+}
+
+impl RuntimeMetadata {
+    /// The identity components used to key the result cache. A change in ANY of
+    /// them must produce a different key, so a stale classification can never be
+    /// served across a revision or artifact change.
+    pub fn cache_identity(&self) -> (&str, &str, &str, &str) {
+        (
+            &self.classifier_id,
+            self.artifact_digest.as_deref().unwrap_or(&self.model_revision),
+            &self.tokenizer_revision,
+            &self.taxonomy_revision,
+        )
+    }
 }
 
 /// A generic classification service core shared by EVERY backend.
@@ -203,6 +246,11 @@ impl<R> ClassifierRuntime for ServiceCore<R>
 where
     R: ClassifierRuntime + Send + Sync + 'static,
 {
+    /// The core adds caching, not identity: it reports the wrapped backend's.
+    fn metadata(&self) -> RuntimeMetadata {
+        self.runtime.metadata()
+    }
+
     /// Classify `input` through the shared core: versioned cache -> single-flight
     /// -> raw backend forward.
     ///
@@ -212,14 +260,18 @@ where
     /// versioned fingerprint, and the hit/miss/total/queue metrics are recorded
     /// here so EVERY backend inherits them.
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
-        // Total service latency is measured from admission to response (AC-012).
-        let total_start = std::time::Instant::now();
         let normalized = input.text.trim().to_string();
+        // Key on the identity the WRAPPED RUNTIME reports, not on module
+        // constants. Keying on constants meant every backend shared one
+        // namespace: two taxonomies in one process would have collided, and a
+        // revision change would have served the previous revision's answers.
+        let meta = self.runtime.metadata();
+        let (classifier_id, model_rev, tokenizer_rev, taxonomy_rev) = meta.cache_identity();
         let key = CacheKey::new(
-            CLASSIFIER_ID,
-            MODEL_REVISION,
-            TOKENIZER_REVISION,
-            TAXONOMY_REVISION,
+            classifier_id,
+            model_rev,
+            tokenizer_rev,
+            taxonomy_rev,
             &normalized,
         );
         let metrics = self.metrics.clone();
@@ -238,8 +290,7 @@ where
             };
             move || {
                 forward_ran.store(true, Ordering::SeqCst);
-                // Queue wait ends when the forward (dequeued work) begins.
-                metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
+                let _ = &metrics;
                 runtime.classify(input)
             }
         };
@@ -249,10 +300,13 @@ where
             metrics.record_cache_miss();
         } else {
             metrics.record_cache_hit();
-            // A hit's queue wait ends when the cached result is served.
-            metrics.record_stage(LatencyStage::Queue, total_start.elapsed());
         }
-        metrics.record_stage(LatencyStage::Total, total_start.elapsed());
+        // Queue and Total are deliberately NOT recorded here. The executor owns
+        // Queue (it is the only component that knows how long a job waited), and
+        // the gRPC surface owns Total (it is the only component that sees the
+        // whole request). Recording them here previously double-counted Queue
+        // into the same histogram and produced a "Total" that started AFTER
+        // dequeue, so it excluded the queue wait it claimed to include.
         result
     }
 }
@@ -314,6 +368,17 @@ impl CandleClassifier {
         definition: ClassifierDefinition,
         metrics: Metrics,
     ) -> Result<Self, ClassifyError> {
+        Self::with_taxonomy_and_digest(embedder, definition, metrics, None)
+    }
+
+    /// As [`CandleClassifier::with_taxonomy`], carrying the content digest of the
+    /// artifact the embedder was loaded from.
+    pub fn with_taxonomy_and_digest(
+        embedder: crate::embedding::Embedder,
+        definition: ClassifierDefinition,
+        metrics: Metrics,
+        artifact_digest: Option<String>,
+    ) -> Result<Self, ClassifyError> {
         let anchors = definition
             .embed_anchors(&embedder)
             .map_err(|e| ClassifyError::Embedding(e.to_string()))?;
@@ -322,8 +387,11 @@ impl CandleClassifier {
             prototypes: Arc::new(Vec::new()),
             taxonomy: Some(Arc::new(ResidentTaxonomy {
                 classifier_id: definition.classifier_id,
+                signal: definition.signal,
                 taxonomy_revision: definition.taxonomy_revision,
+                tokenizer_revision: definition.model_revision.clone(),
                 model_revision: definition.model_revision,
+                artifact_digest,
                 top_k: definition.top_k,
                 anchors,
             })),
@@ -403,6 +471,11 @@ impl CandleClassifier {
                 ),
             ),
         };
+        let tokenizer_revision = self
+            .taxonomy
+            .as_ref()
+            .map(|t| t.tokenizer_revision.clone())
+            .unwrap_or_else(|| TOKENIZER_REVISION.to_string());
         let ranked = ranked
             .into_iter()
             .map(|(id, score)| RankedSignal { id, score })
@@ -412,7 +485,7 @@ impl CandleClassifier {
         Ok(ClassificationResult {
             classifier_id: identity.0,
             model_revision: identity.1,
-            tokenizer_revision: TOKENIZER_REVISION.to_string(),
+            tokenizer_revision,
             taxonomy_revision: identity.2,
             status: ClassifyStatus::Ok,
             ranked,
@@ -444,7 +517,14 @@ impl CandleClassifier {
             model_dir.join("1_Pooling/config.json"),
         )
         .map_err(|e| ClassifyError::Embedding(e.to_string()))?;
-        CandleClassifier::with_taxonomy(embedder, definition, Metrics::new())
+        // Compute the digest of what was actually loaded and carry it into the
+        // classifier's identity. It was previously computed during warmup and
+        // then discarded, so the provenance it was meant to provide never
+        // reached a result or a cache key.
+        let digest =
+            crate::runtime::modelcar_digest(model_dir, crate::runtime::MODELCAR_REQUIRED_FILES)
+                .ok();
+        CandleClassifier::with_taxonomy_and_digest(embedder, definition, Metrics::new(), digest)
     }
 }
 
@@ -453,13 +533,43 @@ impl CandleClassifier {
 #[derive(Debug)]
 struct ResidentTaxonomy {
     classifier_id: String,
+    signal: String,
     taxonomy_revision: String,
     model_revision: String,
+    /// The tokenizer ships INSIDE the ModelCar alongside the weights, so its
+    /// revision is the artifact's revision. Reporting a fixture string here was
+    /// the provenance claim that could not be true.
+    tokenizer_revision: String,
+    /// Content digest of the loaded artifact, so a result can be tied to bytes
+    /// rather than to a requested revision that a stale mount may not match.
+    artifact_digest: Option<String>,
     top_k: usize,
     anchors: Vec<AnchorSet>,
 }
 
 impl ClassifierRuntime for CandleClassifier {
+    fn metadata(&self) -> RuntimeMetadata {
+        match self.taxonomy.as_ref() {
+            Some(t) => RuntimeMetadata {
+                classifier_id: t.classifier_id.clone(),
+                signal: t.signal.clone(),
+                model_revision: t.model_revision.clone(),
+                tokenizer_revision: t.tokenizer_revision.clone(),
+                taxonomy_revision: t.taxonomy_revision.clone(),
+                artifact_digest: t.artifact_digest.clone(),
+            },
+            // The weight-free synthetic path, used only by tests.
+            None => RuntimeMetadata {
+                classifier_id: CLASSIFIER_ID.to_string(),
+                signal: "sensitivity".to_string(),
+                model_revision: MODEL_REVISION.to_string(),
+                tokenizer_revision: TOKENIZER_REVISION.to_string(),
+                taxonomy_revision: TAXONOMY_REVISION.to_string(),
+                artifact_digest: None,
+            },
+        }
+    }
+
     /// Classify `input`, returning ranked semantic signals from the ACTUAL
     /// embedding.
     ///
@@ -614,6 +724,17 @@ impl ClassifyService {
 }
 
 impl ClassifierRuntime for ClassifyService {
+    fn metadata(&self) -> RuntimeMetadata {
+        RuntimeMetadata {
+            classifier_id: CLASSIFIER_ID.to_string(),
+            signal: "sensitivity".to_string(),
+            model_revision: MODEL_REVISION.to_string(),
+            tokenizer_revision: TOKENIZER_REVISION.to_string(),
+            taxonomy_revision: TAXONOMY_REVISION.to_string(),
+            artifact_digest: None,
+        }
+    }
+
     /// Classify `input`, returning ranked semantic signals.
     ///
     /// RAW backend forward: deterministic tokenize + rank over the synthetic

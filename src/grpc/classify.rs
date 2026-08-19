@@ -78,6 +78,9 @@ pub struct ClassifyServer {
 pub struct ClassifyServiceImpl<R> {
     telemetry: Telemetry,
     executor: Arc<InferenceExecutor<crate::classify::ServiceCore<R>>>,
+    /// Shared metrics handle, so the surface that sees the WHOLE request can
+    /// record end-to-end latency.
+    metrics: Metrics,
 }
 
 impl<R> Clone for ClassifyServiceImpl<R> {
@@ -86,6 +89,7 @@ impl<R> Clone for ClassifyServiceImpl<R> {
     fn clone(&self) -> Self {
         Self {
             telemetry: self.telemetry.clone(),
+            metrics: self.metrics.clone(),
             executor: self.executor.clone(),
         }
     }
@@ -116,9 +120,10 @@ where
     /// its tokenize/forward stage recording.
     pub fn with_executor(service: R, telemetry: Telemetry, metrics: Metrics, bound: usize) -> Self {
         let core = crate::classify::ServiceCore::with_metrics(service, metrics.clone());
-        let executor = InferenceExecutor::spawn(core, metrics, bound);
+        let executor = InferenceExecutor::spawn(core, metrics.clone(), bound);
         Self {
             telemetry,
+            metrics,
             executor: Arc::new(executor),
         }
     }
@@ -153,17 +158,25 @@ where
             session_id: req.session_id.clone(),
             context: req.context.clone(),
         });
-        // U-011: only the supported 'sensitivity' signal is accepted; any other
-        // requested signal is rejected explicitly with invalid_argument, never
-        // silently ignored.
-        const SUPPORTED_SIGNAL: &str = "sensitivity";
+        // U-011: a requested signal must match what the LOADED runtime actually
+        // produces. This previously compared against a hardcoded "sensitivity",
+        // so a service serving complexity rejected the only correct signal name
+        // and accepted a wrong one. Asking the runtime means the check stays
+        // true when the classifier changes, and a second backend needs no edit
+        // here at all.
+        let supported = self.executor.metadata().signal;
         for signal in &req.signals {
-            if signal != SUPPORTED_SIGNAL {
+            if signal != &supported {
                 return Err(tonic::Status::invalid_argument(format!(
-                    "unsupported signal '{signal}'; only '{SUPPORTED_SIGNAL}' is supported"
+                    "unsupported signal '{signal}'; this instance serves '{supported}'"
                 )));
             }
         }
+        // AC-012: TOTAL service latency, measured across the whole request
+        // including admission and queue wait. It was previously started inside
+        // ServiceCore, after the executor had already dequeued the job, so it
+        // excluded exactly the wait it was supposed to account for.
+        let total_start = std::time::Instant::now();
         // Build the typed input; session/signals are passthrough metadata, the
         // context is what gets classified. Never a route in the response (AC-010).
         let input = crate::classify::ClassificationInput {
@@ -197,7 +210,11 @@ where
                     _ => tonic::Status::unavailable(e.to_string()),
                 })
             }
-            Ok(result) => result,
+            Ok(result) => {
+                self.metrics
+                    .record_stage(crate::metrics::LatencyStage::Total, total_start.elapsed());
+                result
+            }
         };
         // Map the typed result's status onto the wire ClassificationStatus.
         let status = match result.status {

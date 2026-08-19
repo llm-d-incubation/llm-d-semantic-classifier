@@ -90,6 +90,8 @@ pub struct InferenceExecutor<R> {
     current: Arc<AtomicUsize>,
     /// The observed maximum of `current` — must never exceed `bound`.
     max: Arc<AtomicUsize>,
+    /// The wrapped service, retained so its identity can be queried.
+    service: Arc<R>,
     /// Number of executor threads performing forwards in parallel.
     workers: usize,
     /// The dedicated executor threads (held so they live as long as the service).
@@ -177,6 +179,7 @@ impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
             permits,
             current,
             max,
+            service,
             workers,
             _threads: threads,
             _service: std::marker::PhantomData,
@@ -186,6 +189,15 @@ impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
     /// The number of executor threads running forwards in parallel.
     pub fn workers(&self) -> usize {
         self.workers
+    }
+
+    /// The identity of the classifier this executor runs work against.
+    ///
+    /// The gRPC surface needs it to validate a requested signal, and the
+    /// executor owns the only handle to the service, so it forwards the query
+    /// rather than making callers hold a second reference.
+    pub fn metadata(&self) -> crate::classify::RuntimeMetadata {
+        self.service.metadata()
     }
 
     /// Try to admit a classify job. At/over the bound, admission is rejected

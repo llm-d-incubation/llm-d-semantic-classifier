@@ -2,44 +2,45 @@
 # Materialise a classifier artifact into ./artifacts/models/<name>/ in ModelCar
 # layout. Weights are NEVER committed (the target is gitignored).
 #
-# DEFAULT: the generic multilingual ModernBERT (mmBERT) domain/intent classifier
-# also used by vLLM Semantic Router, pinned by revision (see ADR-0005).
-# Custom or fine-tuned classifiers are opt-in via --classifier.
+# DEFAULT: the prompt-complexity classifier, which is the signal release 0.1
+# serves. Every shipped classifier here is an EMBEDDING model ranked against the
+# anchors in classifiers/, which is what the 0.1 serving backend implements.
+#
+# The generic ModernBERT domain/intent classifier is deliberately NOT offered.
+# It is a SEQUENCE-CLASSIFICATION model and the 0.1 backend cannot rank against
+# it, so fetching it and pointing the server at it produces confident nonsense
+# rather than an error. It returns once the sequence-classification runtime
+# adapter lands (see docs/known-gaps.md).
 #
 # Usage:
-#   ./hack/fetch-model                      # default: generic intent classifier
-#   ./hack/fetch-model --classifier intent  # same, explicit
-#   ./hack/fetch-model --classifier sensitivity   # opt-in custom model
+#   ./hack/fetch-model                            # default: complexity
+#   ./hack/fetch-model --classifier sensitivity   # other built-in taxonomies
 #   ./hack/fetch-model --list
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CLASSIFIER="intent"
+CLASSIFIER="complexity"
 while [ $# -gt 0 ]; do
   case "$1" in
     --classifier) CLASSIFIER="${2:?--classifier needs a name}"; shift 2;;
     --list)
       echo "available classifiers:"
-      echo "  intent       (DEFAULT) llm-semantic-router/mmbert-intent-classifier-merged"
-      echo "               generic ModernBERT sequence classifier, 14 domain labels"
-      echo "  complexity   (custom, opt-in) cnuland/llm-d-sc-complexity"
+      echo "  complexity   (DEFAULT) cnuland/llm-d-sc-complexity"
       echo "               4-tier SIMPLE/MEDIUM/COMPLEX/REASONING, anchor-ranked"
-      echo "  sensitivity  (custom, opt-in) cnuland/llm-d-sc-sensitivity"
+      echo "  sensitivity  cnuland/llm-d-sc-sensitivity"
       echo "               5-tier PUBLIC..NEVER_EGRESS, anchor-ranked"
-      echo "  baseline-minilm  un-finetuned all-MiniLM-L6-v2 (evaluation baseline)"
+      echo "  cost         cnuland/llm-d-sc-cost"
+      echo "               4-tier MINIMAL/LOW/MODERATE/HIGH, anchor-ranked"
+      echo "  baseline-minilm  un-finetuned all-MiniLM-L6-v2 (evaluation baseline only)"
+      echo ""
+      echo "  Generic DOMAIN classification is not yet available: it needs the"
+      echo "  sequence-classification runtime adapter. See docs/known-gaps.md."
       exit 0;;
     *) echo "[fetch-model] unknown argument: $1" >&2; exit 2;;
   esac
 done
 
 case "$CLASSIFIER" in
-  intent)
-    REPO="llm-semantic-router/mmbert-intent-classifier-merged"
-    REV="bf8d3833707d1bb8f9237260c271ca0d5982462d"
-    TARGET="artifacts/models/intent"
-    FILES=("model.safetensors" "tokenizer.json" "config.json"
-           "tokenizer_config.json" "special_tokens_map.json" "label_mapping.json")
-    ;;
   complexity)
     REPO="cnuland/llm-d-sc-complexity"
     REV="c5f55ef419d268ba843c544dc00988d1e9878044"
@@ -51,6 +52,13 @@ case "$CLASSIFIER" in
     REPO="sentence-transformers/all-MiniLM-L6-v2"
     REV="c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
     TARGET="artifacts/models/baseline-minilm"
+    FILES=("model.safetensors" "tokenizer.json" "config.json" "modules.json"
+           "1_Pooling/config.json")
+    ;;
+  cost)
+    REPO="cnuland/llm-d-sc-cost"
+    REV="main"
+    TARGET="artifacts/models/cost"
     FILES=("model.safetensors" "tokenizer.json" "config.json" "modules.json"
            "1_Pooling/config.json")
     ;;

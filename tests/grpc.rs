@@ -29,7 +29,7 @@ fn fixture_request(request_id: &str, session_id: &str) -> ClassifyRequest {
         request_id: request_id.to_string(),
         session_id: session_id.to_string(),
         context: "this is a golden sensitivity input".to_string(),
-        signals: vec!["sensitivity".to_string()],
+        signals: Vec::new(),
     }
 }
 
@@ -285,7 +285,7 @@ fn i005_dummy_gateway_preserves_session_metadata() {
         request_id: "req-0005".to_string(),
         session_id: "sess-0005".to_string(),
         context: "this is a golden sensitivity input".to_string(),
-        signals: vec!["sensitivity".to_string()],
+        signals: Vec::new(),
         deadline: None,
     };
     let outcome = gateway
@@ -328,7 +328,7 @@ fn i006_dummy_gateway_routes_outside_llm_d_sc() {
         request_id: "req-0006".to_string(),
         session_id: "sess-0006".to_string(),
         context: "this is a golden sensitivity input".to_string(),
-        signals: vec!["sensitivity".to_string()],
+        signals: Vec::new(),
         deadline: None,
     };
     let outcome = gateway
@@ -386,7 +386,7 @@ fn i007_response_cannot_dictate_endpoint() {
         request_id: "req-0007".to_string(),
         session_id: "sess-0007".to_string(),
         context: "this is a golden sensitivity input".to_string(),
-        signals: vec!["sensitivity".to_string()],
+        signals: Vec::new(),
         deadline: None,
     };
     let outcome = gateway

@@ -327,7 +327,10 @@ impl BenchmarkRun {
             request_id: format!("bench-{index}"),
             session_id: format!("bench-session-{}", index % 4),
             context: context.to_string(),
-            signals: vec!["sensitivity".to_string()],
+            // Empty: a remote client cannot know which taxonomy this instance
+        // serves, and asserting one couples the tool to a single deployment.
+        // An empty list means "no constraint" and the server returns its signal.
+        signals: Vec::new(),
             deadline: None,
         };
         let outcome = self.gateway.lock().unwrap().classify_and_route(req)?;
@@ -434,7 +437,7 @@ impl BenchmarkRun {
                         request_id: format!("bench-concurrent-{i}"),
                         session_id: format!("bench-session-{}", i % 4),
                         context,
-                        signals: vec!["sensitivity".to_string()],
+                        signals: Vec::new(),
                         deadline: None,
                     };
                     let outcome = gateway

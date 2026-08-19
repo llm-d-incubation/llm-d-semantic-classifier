@@ -37,7 +37,7 @@ fn classifier() -> CandleClassifier {
 fn input(text: &str) -> ClassificationInput {
     ClassificationInput {
         text: text.to_string(),
-        requested_signals: vec!["sensitivity".to_string()],
+        requested_signals: Vec::new(),
         session_metadata: Default::default(),
     }
 }
@@ -230,7 +230,7 @@ fn p002_grpc_localhost_cache_hit() {
         request_id: id.to_string(),
         session_id: "sess-p002".to_string(),
         context: "a stable prompt served repeatedly from the cache".to_string(),
-        signals: vec!["sensitivity".to_string()],
+        signals: Vec::new(),
     };
 
     let t0 = Instant::now();

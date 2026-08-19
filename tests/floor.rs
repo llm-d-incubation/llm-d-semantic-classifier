@@ -28,7 +28,7 @@ fn inference_floor_by_length() {
         let text = word.repeat(target / 5 + 1);
         let inp = ClassificationInput {
             text: text.clone(),
-            requested_signals: vec!["sensitivity".to_string()],
+            requested_signals: Vec::new(),
             session_metadata: HashMap::new(),
         };
         for _ in 0..20 {

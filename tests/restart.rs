@@ -23,7 +23,7 @@ fn full_context_request() -> ClassifyRequest {
         request_id: "req-045".to_string(),
         session_id: "sess-045".to_string(),
         context: "this is a golden sensitivity input".to_string(),
-        signals: vec!["sensitivity".to_string()],
+        signals: Vec::new(),
     }
 }
 

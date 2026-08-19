@@ -25,7 +25,7 @@ fn concurrency_scaling() {
     let text = "sensitivity classification workload token ".repeat(13); // ~64 tokens
     let mk = || ClassificationInput {
         text: text.clone(),
-        requested_signals: vec!["sensitivity".into()],
+        requested_signals: Vec::new(),
         session_metadata: HashMap::new(),
     };
     for _ in 0..20 {
@@ -51,7 +51,7 @@ fn concurrency_scaling() {
                     for _ in 0..per {
                         let i = ClassificationInput {
                             text: t.clone(),
-                            requested_signals: vec!["sensitivity".into()],
+                            requested_signals: Vec::new(),
                             session_metadata: HashMap::new(),
                         };
                         let s = Instant::now();

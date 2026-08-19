@@ -37,31 +37,43 @@ Produced on one contributor's homelab and not independently reproduced.
 
 ## Where the time actually goes
 
-The server logs its per-stage decomposition (S-080). Measured in-cluster over 132 served
-requests:
+The server logs its per-stage decomposition (S-080).
 
-| Stage | p50 | p99 | Share of a cache miss |
-|---|---:|---:|---:|
-| network, ClusterIP hop | 22 us | - | 0.18% |
-| queue, bounded handoff | 2 us | 64 us | 0.02% |
-| tokenize | 56 us | 96 us | 0.46% |
-| **model forward** | **12.29 ms** | **14.34 ms** | **99.4%** |
+**An earlier revision of this section published incorrect numbers and is
+corrected here rather than quietly replaced.** `Total` was started inside the
+service core, AFTER the executor had dequeued the job, so it excluded the queue
+wait it claimed to measure; and `Queue` was written from two different places
+into one histogram, so it was a blend of two quantities. The figures below come
+from the corrected accounting: the executor owns `Queue` because it is the only
+component that knows how long a job waited, and the gRPC surface owns `Total`
+because it is the only component that sees the whole request.
 
-**Everything that is not the model is under one percent of latency.** The bounded handoff, the
-result cache, the tokenizer, and the Service network path are collectively about 80
-microseconds of a 12.3 millisecond request.
+Measured over 126 served requests (60 cache hits, 66 misses):
+
+| Stage | p50 | p99 |
+|---|---:|---:|
+| queue | 5 us | 15 us |
+| tokenize | 26 us | 128 us |
+| model forward | 7.68 ms | 20.48 ms |
+| **total, end to end** | **6.66 ms** | **11.26 ms** |
+
+`total` p50 sitting BELOW `forward` p50 is correct and is the cache working:
+total covers every request while forward covers only misses, so with roughly
+half the traffic hitting the cache the total median lands just inside the miss
+population. Under the previous accounting this relationship was unreadable,
+which is how the error survived being looked at.
+
+**Everything that is not the model remains under one percent of latency.** Queue
+and tokenize together are about 31 microseconds against a 7.68 millisecond
+forward, and the ClusterIP hop measured above adds about 22 microseconds.
 
 Two consequences worth stating plainly:
 
-Optimisation effort belongs in the forward, which means the model, the quantisation, and the
-hardware. Tuning the queue, the cache implementation, or the transport cannot produce a
-measurable improvement, because there is under 1% available to win.
+Optimisation effort belongs in the forward, which means the model, the
+quantisation, and the hardware. Tuning the queue, the cache implementation, or
+the transport cannot produce a measurable improvement, because there is under 1%
+available to win.
 
-The architecture's admission control is effectively free. A bounded queue that costs 2
-microseconds at p50 is not a latency trade for safety under load; it is safety at no cost.
-
-Note the `total p50` of 1 microsecond against a `forward p50` of 12.29 milliseconds. That is
-not an inconsistency: total is recorded for EVERY request and most requests were cache hits,
-so its median is a hit while the forward median is necessarily a miss. It is a direct
-illustration of the cache doing its job, visible only because the stages are reported as
-distributions rather than as means.
+The architecture's admission control is effectively free. A bounded queue that
+costs 5 microseconds at p50 is not a latency trade for safety under load; it is
+safety at no cost.

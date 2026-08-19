@@ -25,7 +25,7 @@ fn request(id: &str, text: &str) -> ClassifyRequest {
         request_id: id.into(),
         session_id: "sess-taxonomy".into(),
         context: text.into(),
-        signals: vec!["sensitivity".into()],
+        signals: Vec::new(),
     }
 }
 

@@ -28,7 +28,7 @@ fn model_dir(name: &str) -> std::path::PathBuf {
 fn input(text: &str) -> ClassificationInput {
     ClassificationInput {
         text: text.to_string(),
-        requested_signals: vec!["sensitivity".to_string()],
+        requested_signals: Vec::new(),
         session_metadata: Default::default(),
     }
 }

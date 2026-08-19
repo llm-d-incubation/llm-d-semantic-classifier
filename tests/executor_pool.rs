@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use llm_d_sc::classify::{
-    ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, ClassifyStatus,
+    ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, RuntimeMetadata, ClassifyStatus,
     RankedSignal,
 };
 use llm_d_sc::handoff::InferenceExecutor;
@@ -34,6 +34,17 @@ struct SlowClassifier {
 }
 
 impl ClassifierRuntime for SlowClassifier {
+    fn metadata(&self) -> RuntimeMetadata {
+        RuntimeMetadata {
+            classifier_id: "test-slow".into(),
+            signal: "sensitivity".into(),
+            model_revision: "test".into(),
+            tokenizer_revision: "test".into(),
+            taxonomy_revision: "test".into(),
+            artifact_digest: None,
+        }
+    }
+
     fn classify(&self, _input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
         let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(now, Ordering::SeqCst);

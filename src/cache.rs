@@ -92,20 +92,83 @@ impl Hash for CacheKey {
 /// forward. The forward closure is the tokenize + model-forward stage; on a hit
 /// it must not be invoked at all. The forward returns a `Result`; only
 /// successful results are stored, failures are returned without caching.
+/// Default entry ceiling.
+///
+/// A classification result is small (a handful of labels and revision strings),
+/// so tens of thousands of entries is a modest footprint. The point is that the
+/// number is FINITE: this cache sits in a long-lived service on a network
+/// request path, and an unbounded map there is a memory leak with a delay fuse.
+pub const DEFAULT_CAPACITY: usize = 50_000;
+
 pub struct ExactCache {
     entries: HashMap<CacheKey, ClassificationResult>,
+    /// Insertion order, used to evict the oldest entry at capacity.
+    ///
+    /// Deliberately FIFO rather than LRU. FIFO bounds memory, which is the
+    /// actual defect, and costs one push and one pop per insert. LRU would
+    /// retain hot keys better but needs recency bookkeeping on every HIT, and a
+    /// hit is currently 632 nanoseconds, so that bookkeeping is a real fraction
+    /// of it. If eviction policy ever shows up in a measurement, the answer is
+    /// the cache library the architecture already selected, not a hand-rolled
+    /// LRU here.
+    order: std::collections::VecDeque<CacheKey>,
+    capacity: usize,
     forward_count: u64,
     hit_count: u64,
+    evicted_count: u64,
 }
 
 impl ExactCache {
     /// An empty cache with no entries.
     pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_CAPACITY)
+    }
+
+    /// An empty cache holding at most `capacity` entries.
+    pub fn with_capacity(capacity: usize) -> Self {
         ExactCache {
             entries: HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            capacity: capacity.max(1),
             forward_count: 0,
             hit_count: 0,
+            evicted_count: 0,
         }
+    }
+
+    /// Store a result, evicting the oldest entry if the cache is at capacity.
+    fn store(&mut self, key: CacheKey, result: ClassificationResult) {
+        if self.entries.contains_key(&key) {
+            self.entries.insert(key, result);
+            return;
+        }
+        while self.entries.len() >= self.capacity {
+            match self.order.pop_front() {
+                Some(oldest) => {
+                    if self.entries.remove(&oldest).is_some() {
+                        self.evicted_count += 1;
+                    }
+                }
+                None => break,
+            }
+        }
+        self.order.push_back(key.clone());
+        self.entries.insert(key, result);
+    }
+
+    /// Number of entries evicted to stay within capacity.
+    pub fn evicted_count(&self) -> u64 {
+        self.evicted_count
+    }
+
+    /// Current number of cached entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// True when the cache holds no entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// Classify `key`.
@@ -129,7 +192,7 @@ impl ExactCache {
         match &result {
             Ok(result) => {
                 self.forward_count += 1;
-                self.entries.insert(key, result.clone());
+                self.store(key, result.clone());
             }
             Err(_) => {
                 // A failed forward is not cached; the error is explicit.
@@ -164,7 +227,7 @@ impl ExactCache {
         result: ClassificationResult,
     ) -> ClassificationResult {
         self.forward_count += 1;
-        self.entries.insert(key, result.clone());
+        self.store(key, result.clone());
         result
     }
 }
@@ -281,6 +344,69 @@ impl Default for SharedCache {
 impl Default for ExactCache {
     fn default() -> Self {
         ExactCache::new()
+    }
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+
+    fn result(id: &str) -> ClassificationResult {
+        ClassificationResult {
+            classifier_id: "t".into(),
+            model_revision: "t".into(),
+            tokenizer_revision: "t".into(),
+            taxonomy_revision: "t".into(),
+            status: crate::classify::ClassifyStatus::Ok,
+            ranked: vec![crate::classify::RankedSignal { id: id.into(), score: 1.0 }],
+        }
+    }
+
+    /// U-120: the cache must not grow without bound.
+    ///
+    /// This is the defect that does not show up in any functional test: an
+    /// unbounded map serves correct results forever and simply consumes the
+    /// process. Asserting on the entry count is the only way to see it.
+    #[test]
+    fn u120_cache_respects_its_capacity() {
+        let mut cache = ExactCache::with_capacity(16);
+        for i in 0..500 {
+            let key = CacheKey::new("c", "m", "t", "x", &format!("distinct input {i}"));
+            cache.classify(key, || Ok(result("a"))).unwrap();
+        }
+        assert!(
+            cache.len() <= 16,
+            "cache holds {} entries with a capacity of 16",
+            cache.len()
+        );
+        assert!(cache.evicted_count() > 0, "eviction must have occurred");
+    }
+
+    /// U-121: eviction removes the OLDEST entry, and a re-stored key does not
+    /// consume a second slot.
+    #[test]
+    fn u121_eviction_is_oldest_first_and_does_not_double_count() {
+        let mut cache = ExactCache::with_capacity(2);
+        let k = |n: &str| CacheKey::new("c", "m", "t", "x", n);
+
+        cache.classify(k("first"), || Ok(result("a"))).unwrap();
+        cache.classify(k("second"), || Ok(result("b"))).unwrap();
+        // Re-classifying an existing key is a HIT and must not grow the cache.
+        cache.classify(k("first"), || panic!("must be a hit")).unwrap();
+        assert_eq!(cache.len(), 2);
+
+        // The third distinct key evicts the oldest, which is "first".
+        cache.classify(k("third"), || Ok(result("c"))).unwrap();
+        assert_eq!(cache.len(), 2);
+
+        let mut forwarded = false;
+        cache
+            .classify(k("first"), || {
+                forwarded = true;
+                Ok(result("a"))
+            })
+            .unwrap();
+        assert!(forwarded, "the oldest entry must have been evicted");
     }
 }
 

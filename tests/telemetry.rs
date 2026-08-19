@@ -66,7 +66,7 @@ fn i085_trace_capture_has_ids_hashes_no_raw_prompt() {
             request_id: "req-085".to_string(),
             session_id: "sess-trace-secret".to_string(),
             context: "a TRACE secret prompt that must stay out of traces".to_string(),
-            signals: vec!["sensitivity".to_string()],
+            signals: Vec::new(),
         })
         .expect("classify must succeed");
 

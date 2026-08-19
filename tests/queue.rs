@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use llm_d_sc::classify::{
-    ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, ClassifyStatus,
+    ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, RuntimeMetadata, ClassifyStatus,
     RankedSignal,
 };
 use llm_d_sc::grpc::classify::generated;
@@ -41,6 +41,17 @@ struct SlowClassifier {
 }
 
 impl ClassifierRuntime for SlowClassifier {
+    fn metadata(&self) -> RuntimeMetadata {
+        RuntimeMetadata {
+            classifier_id: "test-slow".into(),
+            signal: "sensitivity".into(),
+            model_revision: "test".into(),
+            tokenizer_revision: "test".into(),
+            taxonomy_revision: "test".into(),
+            artifact_digest: None,
+        }
+    }
+
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
         std::thread::sleep(self.forward_delay);
         let _ = input;

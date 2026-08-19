@@ -48,7 +48,10 @@ fn main() {
         request_id: id.to_string(),
         session_id: "probe-session".to_string(),
         context: text.to_string(),
-        signals: vec!["sensitivity".to_string()],
+        // Empty: a remote client cannot know which taxonomy this instance
+        // serves, and asserting one couples the tool to a single deployment.
+        // An empty list means "no constraint" and the server returns its signal.
+        signals: Vec::new(),
     };
 
     // Warm the connection and the model so the first sample does not carry
