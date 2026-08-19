@@ -7,6 +7,12 @@ across the README, specs, and commit messages.
 The machine-checked view is `./hack/spec-check 0.1-mvp`, which reports every
 acceptance criterion, every required test ID, and its execution status.
 
+## Project
+
+| Gap | Impact | Phase |
+| --- | --- | --- |
+| Default artifacts are hosted in a personal namespace | the built-in classifiers resolve to `cnuland/llm-d-sc-{complexity,cost,sensitivity}` on Hugging Face, so the default every user pulls depends on one individual's account and cannot be updated by other maintainers. Revisions are digest-pinned, so a moved artifact fails loudly at fetch rather than silently serving different weights. Migrating to the `llm-d` organisation is a one-line change per definition in `classifiers/` plus `hack/fetch-model` | tracked |
+
 ## Contract
 
 | Gap | Impact | Phase |
