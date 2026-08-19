@@ -1,0 +1,23 @@
+# Topology B probe: the dummy AI Gateway runs in its OWN Pod and reaches
+# llm-d-sc through the ClusterIP Service. Evidence for S-002, P-032, P-033.
+#
+# Deliberately identical to the Topology A probe except for --target, so the
+# difference between the two result sets is the network path and nothing else.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: llm-d-sc-topology-b-probe
+  namespace: llm-d-sc
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: gateway-probe
+          image: image-registry.openshift-image-registry.svc:5000/llm-d-sc/llm-d-sc:latest
+          command: ["/usr/local/bin/llm-d-sc-gateway-probe"]
+          args: ["--target", "llm-d-sc.llm-d-sc.svc.cluster.local:50051",
+                 "--topology", "clusterip", "--samples", "200"]
+          resources:
+            requests: {cpu: 200m, memory: 256Mi}

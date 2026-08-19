@@ -1,0 +1,17 @@
+{
+  "cache_hit_rtt_ms": {
+    "max": 0.305,
+    "p50": 0.055,
+    "p95": 0.067,
+    "p99": 0.102
+  },
+  "cache_miss_rtt_ms": {
+    "max": 25.406,
+    "p50": 16.838,
+    "p95": 18.516,
+    "p99": 19.305
+  },
+  "samples": 200,
+  "target": "llm-d-sc.llm-d-sc.svc.cluster.local:50051",
+  "topology": "clusterip"
+}
