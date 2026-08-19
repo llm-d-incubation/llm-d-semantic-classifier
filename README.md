@@ -5,7 +5,6 @@ that turns an incoming request into calibrated semantic signals so an AI Gateway
 can route it well. Release `0.1` classifies request **domain**; additional signal
 types are planned (see [Project status](#project-status)).
 
-[![fast-ci](https://github.com/llm-d-incubation/llm-d-semantic-classifier/actions/workflows/fast-ci.yml/badge.svg)](https://github.com/llm-d-incubation/llm-d-semantic-classifier/actions/workflows/fast-ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![llm-d incubation](https://img.shields.io/badge/llm--d-incubation-5B2C8D.svg)](https://github.com/llm-d-incubation)
 [![Slack](https://img.shields.io/badge/Slack-%23sig--semantic--classifier-4A154B.svg?logo=slack)](https://llm-d.ai/slack)
