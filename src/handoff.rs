@@ -39,6 +39,29 @@ struct InferenceJob {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueFull;
 
+/// Environment variable overriding the executor worker width.
+pub const WORKERS_ENV: &str = "LLM_D_SC_INFERENCE_WORKERS";
+
+/// The default number of executor threads.
+///
+/// A CPU Candle forward is itself internally threaded, so one executor thread
+/// per core over-subscribes the machine and each forward gets slower. The
+/// measured throughput knee on the reference homelab was at 4 concurrent
+/// forwards, so the default is 4 clamped to the available parallelism.
+pub fn default_worker_width() -> usize {
+    if let Ok(v) = std::env::var(WORKERS_ENV) {
+        if let Ok(n) = v.parse::<usize>() {
+            if n >= 1 {
+                return n;
+            }
+        }
+    }
+    std::thread::available_parallelism()
+        .map(|p| p.get().min(4))
+        .unwrap_or(1)
+        .max(1)
+}
+
 /// The bounded handoff + dedicated inference executor.
 ///
 /// A bounded channel (the handoff) sits between the gRPC handler and a dedicated
@@ -56,41 +79,86 @@ pub struct InferenceExecutor<R> {
     current: Arc<AtomicUsize>,
     /// The observed maximum of `current` — must never exceed `bound`.
     max: Arc<AtomicUsize>,
-    /// The dedicated executor thread (held so it lives as long as the service).
-    _thread: std::thread::JoinHandle<()>,
+    /// Number of executor threads performing forwards in parallel.
+    workers: usize,
+    /// The dedicated executor threads (held so they live as long as the service).
+    _threads: Vec<std::thread::JoinHandle<()>>,
     _service: std::marker::PhantomData<Arc<R>>,
 }
 
 impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
-    /// Spawn a dedicated executor thread performing `service`'s forwards behind
-    /// a bounded handoff of `bound` total admitted (in-flight + queued) work.
+    /// Spawn the executor with the DEFAULT worker width (see
+    /// [`default_worker_width`]).
     pub fn spawn(service: R, metrics: Metrics, bound: usize) -> Self {
+        Self::spawn_with_workers(service, metrics, bound, default_worker_width())
+    }
+
+    /// Spawn `workers` dedicated executor threads performing `service`'s
+    /// forwards behind a bounded handoff of `bound` total admitted (in-flight +
+    /// queued) work.
+    ///
+    /// The bound governs ADMISSION; the worker width governs PARALLELISM. They
+    /// are independent: a single worker with a bound of 32 admits 32 requests
+    /// and then executes them one at a time, which is a queue, not concurrency.
+    ///
+    /// Each worker blocks on the shared receiver behind a mutex, so exactly one
+    /// worker waits for the next job while the others run forwards. Handing the
+    /// job off before the forward means the lock is never held across
+    /// `classify`.
+    pub fn spawn_with_workers(
+        service: R,
+        metrics: Metrics,
+        bound: usize,
+        workers: usize,
+    ) -> Self {
+        let workers = workers.max(1);
         let service = Arc::new(service);
         let permits = Arc::new(Semaphore::new(bound));
         let current = Arc::new(AtomicUsize::new(0));
         let max = Arc::new(AtomicUsize::new(0));
-        let (tx, mut rx) = mpsc::channel::<InferenceJob>(bound);
+        let (tx, rx) = mpsc::channel::<InferenceJob>(bound);
+        let rx = Arc::new(std::sync::Mutex::new(rx));
 
-        let thread = std::thread::Builder::new()
-            .name("inference-executor".to_string())
-            .spawn({
-                let metrics = metrics.clone();
-                let current = current.clone();
-                move || {
-                    // The dedicated executor thread performs the model forward
-                    // (NOT on a Tokio network worker). A job's queue wait ends
-                    // when its forward begins.
-                    while let Some(job) = rx.blocking_recv() {
-                        metrics.record_stage(LatencyStage::Queue, job.queued_at.elapsed());
-                        let result = service.classify(job.input);
-                        let _ = job.respond.send(result);
-                        // `job._permit` is dropped here (releasing the bound), and
-                        // the admitted count is decremented once the job completes.
-                        current.fetch_sub(1, Ordering::SeqCst);
-                    }
-                }
+        let threads = (0..workers)
+            .map(|i| {
+                std::thread::Builder::new()
+                    .name(format!("inference-executor-{i}"))
+                    .spawn({
+                        let metrics = metrics.clone();
+                        let current = current.clone();
+                        let service = service.clone();
+                        let rx = rx.clone();
+                        move || {
+                            // The dedicated executor threads perform the model
+                            // forward (NOT on a Tokio network worker). A job's
+                            // queue wait ends when its forward begins.
+                            loop {
+                                // Scope the lock so it is released BEFORE the
+                                // forward runs; otherwise the pool would
+                                // serialise on the mutex and the extra workers
+                                // would buy nothing.
+                                let job = {
+                                    let mut guard = match rx.lock() {
+                                        Ok(g) => g,
+                                        Err(_) => return,
+                                    };
+                                    guard.blocking_recv()
+                                };
+                                let Some(job) = job else { return };
+                                metrics
+                                    .record_stage(LatencyStage::Queue, job.queued_at.elapsed());
+                                let result = service.classify(job.input);
+                                let _ = job.respond.send(result);
+                                // `job._permit` is dropped here (releasing the
+                                // bound), and the admitted count is decremented
+                                // once the job completes.
+                                current.fetch_sub(1, Ordering::SeqCst);
+                            }
+                        }
+                    })
+                    .expect("inference executor thread must spawn")
             })
-            .expect("inference executor thread must spawn");
+            .collect();
 
         Self {
             sender: tx,
@@ -98,9 +166,15 @@ impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
             permits,
             current,
             max,
-            _thread: thread,
+            workers,
+            _threads: threads,
             _service: std::marker::PhantomData,
         }
+    }
+
+    /// The number of executor threads running forwards in parallel.
+    pub fn workers(&self) -> usize {
+        self.workers
     }
 
     /// Try to admit a classify job. At/over the bound, admission is rejected

@@ -28,7 +28,8 @@ use std::sync::Arc;
 
 use crate::cache::{CacheKey, SharedCache};
 use crate::metrics::{LatencyStage, Metrics};
-use crate::ranker::{cosine_rank, Prototype};
+use crate::ranker::{anchor_rank, cosine_rank, AnchorSet, Prototype};
+use crate::taxonomy::ClassifierDefinition;
 use crate::tokenizer::Tokenizer;
 
 /// Versioned fingerprint components pinned to the committed synthetic fixtures.
@@ -271,6 +272,10 @@ where
 pub struct CandleClassifier {
     embedder: crate::embedding::Embedder,
     prototypes: Arc<Vec<Prototype>>,
+    /// The active taxonomy. When present the classifier ranks against real
+    /// labelled anchors and reports that taxonomy's identity; when absent it
+    /// falls back to the committed synthetic prototypes (weight-free tests).
+    taxonomy: Option<Arc<ResidentTaxonomy>>,
     metrics: Metrics,
     /// Number of real tokenizer invocations (instrumented for the parity test).
     tokenizer_calls: Arc<AtomicU64>,
@@ -294,10 +299,46 @@ impl CandleClassifier {
         CandleClassifier {
             embedder,
             prototypes: Arc::new(prototypes),
+            taxonomy: None,
             metrics,
             tokenizer_calls: Arc::new(AtomicU64::new(0)),
             forward_calls: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Build a Candle classifier that ranks against a real classifier
+    /// definition. The anchors are embedded ONCE here, at load time, by the same
+    /// resident model that will embed requests.
+    pub fn with_taxonomy(
+        embedder: crate::embedding::Embedder,
+        definition: ClassifierDefinition,
+        metrics: Metrics,
+    ) -> Result<Self, ClassifyError> {
+        let anchors = definition
+            .embed_anchors(&embedder)
+            .map_err(|e| ClassifyError::Embedding(e.to_string()))?;
+        Ok(CandleClassifier {
+            embedder,
+            prototypes: Arc::new(Vec::new()),
+            taxonomy: Some(Arc::new(ResidentTaxonomy {
+                classifier_id: definition.classifier_id,
+                taxonomy_revision: definition.taxonomy_revision,
+                model_revision: definition.model_revision,
+                top_k: definition.top_k,
+                anchors,
+            })),
+            metrics,
+            tokenizer_calls: Arc::new(AtomicU64::new(0)),
+            forward_calls: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
+    /// The active classifier id (the taxonomy's id, or the synthetic fallback).
+    pub fn classifier_id(&self) -> &str {
+        self.taxonomy
+            .as_ref()
+            .map(|t| t.classifier_id.as_str())
+            .unwrap_or(CLASSIFIER_ID)
     }
 
     /// A SHARED handle to the classifier's metrics registry.
@@ -344,25 +385,58 @@ impl CandleClassifier {
             .embedder
             .embed_ids(ids)
             .map_err(|e| ClassifyError::Embedding(e.to_string()))?;
-        let ranked = cosine_rank(&embedding, &self.prototypes)
+        let (ranked, identity) = match self.taxonomy.as_ref() {
+            Some(t) => (
+                anchor_rank(&embedding, &t.anchors, t.top_k),
+                (
+                    t.classifier_id.clone(),
+                    t.model_revision.clone(),
+                    t.taxonomy_revision.clone(),
+                ),
+            ),
+            None => (
+                cosine_rank(&embedding, &self.prototypes),
+                (
+                    CLASSIFIER_ID.to_string(),
+                    MODEL_REVISION.to_string(),
+                    TAXONOMY_REVISION.to_string(),
+                ),
+            ),
+        };
+        let ranked = ranked
             .into_iter()
             .map(|(id, score)| RankedSignal { id, score })
             .collect();
         self.metrics
             .record_stage(LatencyStage::Forward, forward_start.elapsed());
         Ok(ClassificationResult {
-            classifier_id: CLASSIFIER_ID.to_string(),
-            model_revision: MODEL_REVISION.to_string(),
+            classifier_id: identity.0,
+            model_revision: identity.1,
             tokenizer_revision: TOKENIZER_REVISION.to_string(),
-            taxonomy_revision: TAXONOMY_REVISION.to_string(),
+            taxonomy_revision: identity.2,
             status: ClassifyStatus::Ok,
             ranked,
         })
     }
 
-    /// Build the classifier from the fetched sensitivity model artifacts and the
-    /// committed synthetic prototypes. Offline: reads the resident model dir.
+    /// Build the classifier from the resident ModelCar directory, ranking
+    /// against the classifier definition selected by the environment
+    /// (`LLM_D_SC_CLASSIFIER`, default `complexity`). The definition may name a
+    /// built-in taxonomy or point at a custom definition JSON. Offline: reads
+    /// the resident model dir and a compiled-in or local definition, never the
+    /// network.
     pub fn from_modelcar(model_dir: &std::path::Path) -> Result<Self, ClassifyError> {
+        let definition = ClassifierDefinition::from_env()
+            .map_err(|e| ClassifyError::Unavailable(e.to_string()))?;
+        Self::from_modelcar_with(model_dir, definition)
+    }
+
+    /// Build the classifier from the resident ModelCar directory against an
+    /// EXPLICIT classifier definition.
+    pub fn from_modelcar_with(
+        model_dir: &std::path::Path,
+        definition: ClassifierDefinition,
+    ) -> Result<Self, ClassifyError> {
         let embedder = crate::embedding::Embedder::load(
             model_dir.join("config.json"),
             model_dir.join("model.safetensors"),
@@ -370,15 +444,19 @@ impl CandleClassifier {
             model_dir.join("1_Pooling/config.json"),
         )
         .map_err(|e| ClassifyError::Embedding(e.to_string()))?;
-        let prototypes = load_prototypes(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests")
-                .join("fixtures")
-                .join("modelcar")
-                .join("synthetic-prototypes.json"),
-        );
-        Ok(CandleClassifier::new(embedder, prototypes))
+        CandleClassifier::with_taxonomy(embedder, definition, Metrics::new())
     }
+}
+
+/// The load-time-resolved taxonomy held resident alongside the model: the
+/// embedded anchors plus the identity that every result reports.
+#[derive(Debug)]
+struct ResidentTaxonomy {
+    classifier_id: String,
+    taxonomy_revision: String,
+    model_revision: String,
+    top_k: usize,
+    anchors: Vec<AnchorSet>,
 }
 
 impl ClassifierRuntime for CandleClassifier {

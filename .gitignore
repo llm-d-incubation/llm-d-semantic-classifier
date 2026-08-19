@@ -3,3 +3,9 @@ target/
 node_modules/
 *.log
 .DS_Store
+
+# Training pipeline outputs: regenerable from training/sdg_llm.py + verify.py.
+# The generated corpora and fine-tuned weights are large and are reproduced by
+# the pipeline, so only the pipeline itself is version-controlled.
+training/data/
+training/models/

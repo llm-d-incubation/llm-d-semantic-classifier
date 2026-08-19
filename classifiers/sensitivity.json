@@ -1,0 +1,79 @@
+{
+  "classifier_id": "sensitivity",
+  "signal": "sensitivity",
+  "taxonomy_revision": "sensitivity-anchors-v1",
+  "model_repo": "cnuland/llm-d-sc-sensitivity",
+  "model_revision": "d82ff10d41fcf7d33f90e0597e6621bf1ff94ed4",
+  "method": "anchor-topk-mean",
+  "top_k": 3,
+  "labels": [
+    "PUBLIC",
+    "INTERNAL",
+    "CONFIDENTIAL",
+    "REGULATED",
+    "NEVER_EGRESS"
+  ],
+  "anchors": {
+    "PUBLIC": [
+      "What is the difference between TCP and UDP?",
+      "Explain how a hash map works.",
+      "What year did the Apollo 11 mission land on the moon?",
+      "Give me a recipe for sourdough bread.",
+      "How do I center a div in CSS?",
+      "Summarize the plot of Moby Dick.",
+      "What are the health benefits of walking daily?",
+      "Convert 45 miles per hour to kilometers per hour.",
+      "Who won the FIFA World Cup in 2018?",
+      "Explain photosynthesis to a ten year old."
+    ],
+    "INTERNAL": [
+      "Where is the runbook for restarting the ingest workers?",
+      "Which team owns the billing service on-call rotation?",
+      "What is our standard sprint length and retro format?",
+      "How do I request access to the staging cluster?",
+      "Summarize the notes from last week's platform sync.",
+      "What is the deploy freeze window before the quarterly release?",
+      "Which internal wiki page documents our logging conventions?",
+      "How do I file an IT ticket for a replacement laptop?",
+      "What is the naming convention for our internal Kubernetes namespaces?",
+      "Who should I ask about the onboarding checklist for new engineers?"
+    ],
+    "CONFIDENTIAL": [
+      "Draft talking points for the unannounced acquisition of a competitor.",
+      "What are the negotiated discount terms in the enterprise contract with our largest customer?",
+      "Summarize the compensation bands for senior engineers in this proposal.",
+      "Review the board deck covering next year's unreleased product roadmap.",
+      "What were the findings in the internal penetration test report?",
+      "Prepare a memo about the planned reduction in force for Q3.",
+      "Compare our unpublished margin figures against the competitor estimate.",
+      "Outline the litigation strategy our counsel proposed for the pending dispute.",
+      "What is the confidential valuation used in the current funding round?",
+      "Summarize the security incident that has not yet been publicly disclosed."
+    ],
+    "REGULATED": [
+      "Here is a patient's chart, summarize the diagnosis and medication history.",
+      "Process this customer's credit card number and billing address for a refund.",
+      "Extract the social security numbers from this employee spreadsheet.",
+      "Summarize the clinical trial adverse events by participant identifier.",
+      "Redact the personal data in this GDPR subject access request.",
+      "Analyze these student grade records and identify at-risk individuals.",
+      "Review this mortgage application including the applicant's income and SSN.",
+      "Summarize the lab results for the patient in room 402.",
+      "Reconcile these bank account numbers against the transaction ledger.",
+      "Prepare the HIPAA disclosure log for this month's patient record accesses."
+    ],
+    "NEVER_EGRESS": [
+      "Here is our production database password, help me build the connection string.",
+      "This is the private signing key for our release artifacts, explain the format.",
+      "Debug this config that contains our live AWS secret access key.",
+      "Rotate this OAuth client secret and update the deployment manifest.",
+      "Here is the root CA private key, help me issue a new certificate.",
+      "Explain this stack trace, the auth bearer token is included in the header dump.",
+      "Here is the .env file with all production credentials, find the misconfiguration.",
+      "Store this API key for the payments provider and write the retry logic.",
+      "This kubeconfig has cluster-admin credentials, help me script against it.",
+      "Here is the SSH private key for the bastion host, explain the passphrase prompt."
+    ]
+  },
+  "provenance": "Anchors authored by the llm-d-sc maintainers for evaluation. They are NOT drawn from the model's training corpus."
+}

@@ -52,6 +52,56 @@ pub fn cosine_rank(embedding: &[f32], prototypes: &[Prototype]) -> Vec<(String, 
     ranked
 }
 
+/// A labelled anchor set: every anchor embedding that defines one label.
+///
+/// A label is not a single point but a REGION of embedding space. Averaging all
+/// anchors into one centroid discards that shape, so a label whose examples are
+/// legitimately spread (a broad tier) is penalised. Scoring by the mean of the
+/// top-k nearest anchors keeps the region while staying robust to a single
+/// unrepresentative anchor.
+#[derive(Debug, Clone)]
+pub struct AnchorSet {
+    pub label: String,
+    pub vectors: Vec<Vec<f32>>,
+}
+
+/// Rank labels by the mean cosine similarity of their `top_k` nearest anchors.
+///
+/// Ordering contract matches [`cosine_rank`]:
+/// 1. Primary: score descending.
+/// 2. Secondary (exact ties): label ascending lexicographically.
+///
+/// `top_k` is clamped to the number of anchors a label actually has, so a label
+/// with fewer anchors than `top_k` is scored over all of them rather than
+/// silently scoring lower than a label with more.
+pub fn anchor_rank(embedding: &[f32], anchors: &[AnchorSet], top_k: usize) -> Vec<(String, f64)> {
+    let mut ranked: Vec<(String, f64)> = anchors
+        .iter()
+        .map(|set| {
+            let mut sims: Vec<f64> = set
+                .vectors
+                .iter()
+                .map(|v| cosine_similarity(embedding, v))
+                .collect();
+            // Descending; non-finite compares Equal (pure-math contract).
+            sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+            let k = top_k.clamp(1, sims.len().max(1));
+            let score = if sims.is_empty() {
+                0.0
+            } else {
+                sims[..k.min(sims.len())].iter().sum::<f64>() / k.min(sims.len()) as f64
+            };
+            (set.label.clone(), score)
+        })
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    ranked
+}
+
 /// Cosine similarity between two equal-length vectors: dot / (|a| * |b|).
 ///
 /// Degenerate (zero-norm) vectors score 0.0 against everything.

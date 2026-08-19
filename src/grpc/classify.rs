@@ -59,6 +59,7 @@ pub struct ClassifyServer {
     metrics: Metrics,
     telemetry: Telemetry,
     readiness: crate::runtime::Readiness,
+    accepted: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The runtime-backed tonic classify service.
@@ -339,7 +340,22 @@ impl ClassifyServer {
         let bound = listener.local_addr()?;
 
         let service = generated::classify_server::ClassifyServer::new(service);
-        let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+        // I-008 evidence: count every ACCEPTED TCP connection. A client that
+        // reuses one persistent HTTP/2 channel across N calls produces exactly
+        // ONE accept; a client that reconnects per call produces N. Measuring
+        // this at the accept boundary observes the property from OUTSIDE the
+        // client, so the client cannot assert its own good behaviour.
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let accept_counter = accepted.clone();
+        let incoming = tokio_stream::StreamExt::map(
+            tokio_stream::wrappers::TcpListenerStream::new(listener),
+            move |conn| {
+                if conn.is_ok() {
+                    accept_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                conn
+            },
+        );
         let serve = tonic::transport::Server::builder()
             .add_service(service)
             .serve_with_incoming(incoming);
@@ -352,6 +368,7 @@ impl ClassifyServer {
             metrics,
             telemetry,
             readiness,
+            accepted,
         })
     }
 
@@ -388,6 +405,16 @@ impl ClassifyServer {
         self.metrics.clone()
     }
 
+    /// The number of TCP connections this server has ACCEPTED.
+    ///
+    /// I-008 is the claim that multi-turn requests do not reconnect per call.
+    /// That claim is about the transport, so it is measured at the transport:
+    /// N classify calls over one persistent channel must accept exactly ONE
+    /// connection.
+    pub fn accepted_connection_count(&self) -> u64 {
+        self.accepted.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// A copy of the captured trace events recorded by served classifications.
     ///
     /// Each [`TraceEvent`] carries the request id and context/session hashes but
@@ -400,12 +427,12 @@ impl ClassifyServer {
 /// Blocking classify client over a persistent HTTP/2 channel.
 ///
 /// Connects once and reuses the single [`tonic::transport::Channel`] for every
-/// [`ClassifyClient::classify`] call, so multi-turn requests never reconnect per
-/// call ([`ClassifyClient::channel_reconnect_count`] stays 0 — I-008).
+/// [`ClassifyClient::classify`] call. The no-reconnect claim (I-008) is proven
+/// SERVER-side by [`ClassifyServer::accepted_connection_count`], not by a
+/// counter this client keeps about itself.
 pub struct ClassifyClient {
     runtime: tokio::runtime::Runtime,
     channel: tonic::transport::Channel,
-    reconnects: u64,
 }
 
 impl ClassifyClient {
@@ -426,11 +453,7 @@ impl ClassifyClient {
             .block_on(endpoint.connect())
             .map_err(io::Error::other)?;
 
-        Ok(ClassifyClient {
-            runtime,
-            channel,
-            reconnects: 0,
-        })
+        Ok(ClassifyClient { runtime, channel })
     }
 
     /// Send one classify request over the persistent channel and return the
@@ -444,10 +467,4 @@ impl ClassifyClient {
         Ok(response.into_inner())
     }
 
-    /// The number of channel re-establishments after the initial connect.
-    ///
-    /// The channel is created once and reused, so this remains 0 across turns.
-    pub fn channel_reconnect_count(&self) -> u64 {
-        self.reconnects
-    }
 }

@@ -1,0 +1,66 @@
+{
+  "classifier_id": "cost",
+  "signal": "cost",
+  "taxonomy_revision": "cost-anchors-v1",
+  "model_repo": "sentence-transformers/all-MiniLM-L6-v2",
+  "model_revision": "c9745ed1d9f207416be6d2e6f8de32d1f16199bf",
+  "method": "anchor-topk-mean",
+  "top_k": 3,
+  "labels": [
+    "MINIMAL",
+    "LOW",
+    "MODERATE",
+    "HIGH"
+  ],
+  "anchors": {
+    "MINIMAL": [
+      "What is the capital of Peru?",
+      "How many ounces are in a pound?",
+      "What year was the transistor invented?",
+      "Define the word ubiquitous.",
+      "What is the chemical symbol for tungsten?",
+      "Set a timer for ten minutes.",
+      "What is 12 times 14?",
+      "Who directed the film Jaws?",
+      "What is the speed of sound at sea level?",
+      "Is the post office open on Sunday?"
+    ],
+    "LOW": [
+      "Write a one paragraph summary of what a load balancer does.",
+      "Give me a short bash one liner to count lines in a file.",
+      "Explain in a few sentences why leaves change color in autumn.",
+      "Write a two sentence product description for a travel mug.",
+      "Suggest three names for a neighborhood book club.",
+      "Convert this sentence to passive voice.",
+      "Write a short SQL query that returns the top ten customers by revenue.",
+      "Give a brief pros and cons list for electric versus gas mowers.",
+      "Rewrite this email subject line to be more concise.",
+      "Explain the difference between latitude and longitude in a short paragraph."
+    ],
+    "MODERATE": [
+      "Write a complete unit test suite for a shopping cart module with edge cases.",
+      "Draft a detailed onboarding guide for a new warehouse employee covering safety and equipment.",
+      "Write a thorough comparison of three project management methodologies with examples.",
+      "Generate a full lesson plan for a week of introductory astronomy including activities.",
+      "Write a technical blog post explaining database indexing with worked examples.",
+      "Produce a detailed troubleshooting guide for a home network with multiple failure scenarios.",
+      "Write a complete Python module that parses log files and produces a summary report.",
+      "Draft a comprehensive meeting agenda and pre read for a quarterly planning session.",
+      "Write an in depth review of a camera lens covering optics, build, and sample use cases.",
+      "Create a detailed migration checklist for moving a website to a new host."
+    ],
+    "HIGH": [
+      "Analyze this two hundred page contract and summarize every obligation by party and deadline.",
+      "Read the attached annual reports for five companies and produce a comparative financial analysis.",
+      "Generate a complete technical specification document for a new payments platform, including all interfaces.",
+      "Review this entire codebase and produce a refactoring plan with per module recommendations.",
+      "Translate this full length novel manuscript into Spanish preserving tone and register.",
+      "Ingest these fifty customer interview transcripts and synthesize themes with supporting quotes.",
+      "Write a book length study guide covering the entire undergraduate organic chemistry curriculum.",
+      "Analyze twelve months of server logs and produce a capacity planning report with projections.",
+      "Produce a full compliance gap analysis against every control in the framework with remediation steps.",
+      "Draft an exhaustive grant proposal including budget, methodology, literature review, and appendices."
+    ]
+  },
+  "provenance": "Anchors authored by the llm-d-sc maintainers. No fine-tuned cost model exists yet; this taxonomy runs on a general-purpose embedder and its measured accuracy is reported in docs/benchmarks/."
+}

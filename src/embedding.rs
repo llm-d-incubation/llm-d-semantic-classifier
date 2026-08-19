@@ -62,8 +62,13 @@ impl EmbeddingContract {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<EmbeddingContract, EmbeddingError> {
         let raw = fs::read_to_string(path).map_err(EmbeddingError::Io)?;
         let root: Value = serde_json::from_str(&raw).map_err(EmbeddingError::Json)?;
+        // sentence-transformers has emitted two pooling-config schemas: the
+        // legacy `word_embedding_dimension` and, since ST 3.x, the newer
+        // `embedding_dimension`. A ModelCar produced by either version is a
+        // valid artifact, so accept both rather than rejecting the newer one.
         let word_embedding_dimension = root
             .get("word_embedding_dimension")
+            .or_else(|| root.get("embedding_dimension"))
             .and_then(Value::as_u64)
             .ok_or(EmbeddingError::MissingField("word_embedding_dimension"))?
             as usize;

@@ -130,8 +130,10 @@ async fn i001_real_tonic_round_trip() {
 /// AC-009 requires a PERSISTENT gRPC channel. The dummy gateway makes several
 /// calls over the same channel and must NOT open a new connection per call
 /// (I-008: multi-turn requests do not reconnect per call). This test drives
-/// several turn requests and asserts the client reused the persistent channel
-/// (zero reconnect events) and every turn succeeded.
+/// several turn requests and asserts, FROM THE SERVER SIDE, that exactly one
+/// TCP connection was accepted across all of them. Counting at the accept
+/// boundary means the client cannot vouch for its own behaviour: a client that
+/// reconnected per call would show 5 accepts here.
 #[test]
 fn i002_persistent_http2_channel_reused() {
     use llm_d_sc::grpc::classify::{ClassifyClient, ClassifyServer};
@@ -159,9 +161,68 @@ fn i002_persistent_http2_channel_reused() {
     }
 
     assert_eq!(
-        client.channel_reconnect_count(),
-        0,
-        "I-008: multi-turn requests must not reconnect per call"
+        server.accepted_connection_count(),
+        1,
+        "I-008: 5 turns over a persistent channel must accept exactly ONE TCP \
+         connection; more than one means the client reconnected per call"
+    );
+}
+
+/// I-092 (control for I-002): the accept counter must be able to REPORT reconnection.
+///
+/// A counter that can only ever read 1 would prove nothing, and the assertion it
+/// replaced (a client-side field that was initialised to 0 and never
+/// incremented) failed exactly that way. This test connects a NEW client per
+/// call and asserts the server observes one accept per connection, so the
+/// I-002 result above is a measurement rather than a constant.
+#[test]
+fn i092_control_reconnecting_client_is_observed_as_multiple_accepts() {
+    use llm_d_sc::grpc::classify::{ClassifyClient, ClassifyServer};
+
+    let server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
+    let addr = server.local_addr();
+
+    for turn in 1..=3 {
+        let mut client =
+            ClassifyClient::connect(&addr).expect("each fresh client must connect");
+        client
+            .classify(fixture_request(&format!("rc-{turn:04}"), "sess-rc"))
+            .expect("turn must succeed");
+    }
+
+    assert_eq!(
+        server.accepted_connection_count(),
+        3,
+        "the accept counter must observe one accept per fresh connection, \
+         otherwise the I-002 assertion is vacuous"
+    );
+}
+
+/// I-008: multi-turn requests do not reconnect per call.
+///
+/// The same transport property as I-002, asserted at the scale the ID describes:
+/// a sustained multi-turn session. Measured server-side by counting accepted TCP
+/// connections, so the client cannot vouch for itself. I-092 is the control
+/// proving the counter can report reconnection.
+#[test]
+fn i008_multi_turn_session_does_not_reconnect_per_call() {
+    use llm_d_sc::grpc::classify::{ClassifyClient, ClassifyServer};
+
+    let server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
+    let addr = server.local_addr();
+    let mut client = ClassifyClient::connect(addr).expect("client must connect");
+
+    const TURNS: usize = 25;
+    for turn in 1..=TURNS {
+        client
+            .classify(fixture_request(&format!("mt-{turn:04}"), "sess-multiturn"))
+            .expect("every turn of the session must succeed");
+    }
+
+    assert_eq!(
+        server.accepted_connection_count(),
+        1,
+        "{TURNS} turns over one session must accept exactly ONE TCP connection"
     );
 }
 

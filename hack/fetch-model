@@ -22,8 +22,11 @@ while [ $# -gt 0 ]; do
       echo "available classifiers:"
       echo "  intent       (DEFAULT) llm-semantic-router/mmbert-intent-classifier-merged"
       echo "               generic ModernBERT sequence classifier, 14 domain labels"
-      echo "  sensitivity  (custom, opt-in) cnuland/semantic-routing-sensitivity"
-      echo "               SentenceTransformers embedding model, taxonomy UNVERIFIED"
+      echo "  complexity   (custom, opt-in) cnuland/llm-d-sc-complexity"
+      echo "               4-tier SIMPLE/MEDIUM/COMPLEX/REASONING, anchor-ranked"
+      echo "  sensitivity  (custom, opt-in) cnuland/llm-d-sc-sensitivity"
+      echo "               5-tier PUBLIC..NEVER_EGRESS, anchor-ranked"
+      echo "  baseline-minilm  un-finetuned all-MiniLM-L6-v2 (evaluation baseline)"
       exit 0;;
     *) echo "[fetch-model] unknown argument: $1" >&2; exit 2;;
   esac
@@ -37,9 +40,23 @@ case "$CLASSIFIER" in
     FILES=("model.safetensors" "tokenizer.json" "config.json"
            "tokenizer_config.json" "special_tokens_map.json" "label_mapping.json")
     ;;
+  complexity)
+    REPO="cnuland/llm-d-sc-complexity"
+    REV="c5f55ef419d268ba843c544dc00988d1e9878044"
+    TARGET="artifacts/models/complexity"
+    FILES=("model.safetensors" "tokenizer.json" "config.json" "modules.json"
+           "1_Pooling/config.json")
+    ;;
+  baseline-minilm)
+    REPO="sentence-transformers/all-MiniLM-L6-v2"
+    REV="c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
+    TARGET="artifacts/models/baseline-minilm"
+    FILES=("model.safetensors" "tokenizer.json" "config.json" "modules.json"
+           "1_Pooling/config.json")
+    ;;
   sensitivity)
-    REPO="cnuland/semantic-routing-sensitivity"
-    REV="43f21d21ac48134464f8510a9ac9c95bdac7ba86"
+    REPO="cnuland/llm-d-sc-sensitivity"
+    REV="d82ff10d41fcf7d33f90e0597e6621bf1ff94ed4"
     TARGET="artifacts/models/sensitivity"
     FILES=("model.safetensors" "tokenizer.json" "config.json" "modules.json"
            "1_Pooling/config.json")

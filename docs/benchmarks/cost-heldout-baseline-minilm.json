@@ -1,0 +1,43 @@
+{
+  "accuracy": 0.75,
+  "classifier": "classifiers/cost.json",
+  "confusion": [
+    [
+      14,
+      1,
+      0,
+      0
+    ],
+    [
+      4,
+      9,
+      0,
+      2
+    ],
+    [
+      0,
+      1,
+      11,
+      3
+    ],
+    [
+      0,
+      1,
+      3,
+      11
+    ]
+  ],
+  "dataset": "evals/datasets/cost-heldout.jsonl",
+  "hard_case_accuracy": 0.6,
+  "labels": [
+    "MINIMAL",
+    "LOW",
+    "MODERATE",
+    "HIGH"
+  ],
+  "latency_p50_ms": 23.43,
+  "latency_p99_ms": 34.97,
+  "macro_f1": 0.7458624060403815,
+  "model": "artifacts/models/baseline-minilm",
+  "n": 60
+}

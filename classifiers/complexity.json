@@ -1,0 +1,74 @@
+{
+  "classifier_id": "complexity",
+  "signal": "complexity",
+  "taxonomy_revision": "scr-default-anchors-v1",
+  "model_repo": "cnuland/llm-d-sc-complexity",
+  "model_revision": "c5f55ef419d268ba843c544dc00988d1e9878044",
+  "method": "anchor-topk-mean",
+  "top_k": 3,
+  "labels": [
+    "SIMPLE",
+    "MEDIUM",
+    "COMPLEX",
+    "REASONING"
+  ],
+  "anchors": {
+    "SIMPLE": [
+      "What is the capital of France?",
+      "Define photosynthesis in one sentence.",
+      "Translate 'good morning' to Spanish.",
+      "How many planets are in the solar system?",
+      "What does the acronym HTML stand for?",
+      "Convert 100 degrees Fahrenheit to Celsius.",
+      "What time is it in Tokyo?",
+      "Who wrote Romeo and Juliet?",
+      "What is the boiling point of water?",
+      "Turn on the living room lights.",
+      "What's the weather today?",
+      "How do you say thank you in French?"
+    ],
+    "MEDIUM": [
+      "Write a Python function that reads a CSV file and returns the sum of a column.",
+      "Explain the difference between TCP and UDP with examples of when to use each.",
+      "Create a SQL query that joins two tables and groups results by category.",
+      "Write a bash script that finds all files larger than 100MB sorted by size.",
+      "Summarize the key concepts of object-oriented programming with an example.",
+      "Debug this JavaScript code that filters an array but returns undefined.",
+      "Write unit tests for a function that validates email addresses.",
+      "Create a Dockerfile for a Python Flask application with multi-stage build.",
+      "Write a regex pattern that matches valid IPv4 addresses.",
+      "Explain how garbage collection works in Java with an example.",
+      "Set up a cron job that backs up a PostgreSQL database every night.",
+      "Write a Python decorator that caches function results with a TTL."
+    ],
+    "COMPLEX": [
+      "Design a microservices architecture for an e-commerce platform with inventory, orders, and payments.",
+      "Refactor this monolithic application into modules with dependency injection and backward compatibility.",
+      "Implement a concurrent web scraper with rate limiting, retries, and database connection pooling.",
+      "Build a CI/CD pipeline for a multi-service app with staging, production, and database migrations.",
+      "Create a React component library with TypeScript including a data table with sorting and pagination.",
+      "Design a database schema for a multi-tenant SaaS app with row-level security and audit logging.",
+      "Implement authentication middleware supporting OAuth2, JWT, and API keys with RBAC.",
+      "Architect a real-time notification system handling millions of WebSocket connections with failover.",
+      "Design a distributed caching layer with cache invalidation, replication, and partition tolerance.",
+      "Build an event-driven data pipeline integrating Kafka, Spark, and a data lake with exactly-once semantics.",
+      "Create a Kubernetes operator that manages custom database clusters with automated failover and backups.",
+      "Design a zero-downtime migration strategy for splitting a monolithic database into domain-specific services."
+    ],
+    "REASONING": [
+      "Prove by mathematical induction that the sum of 1 to n equals n(n+1)/2.",
+      "Analyze the time complexity of this recursive algorithm using the Master theorem.",
+      "Reason through the CAP theorem implications for this distributed system with network partitions.",
+      "Formally verify this sorting algorithm by establishing a loop invariant and proving termination.",
+      "Derive the gradient descent update rule for a two-layer neural network with ReLU activation.",
+      "Analyze whether this concurrent program has a potential deadlock using a resource allocation graph.",
+      "Prove that the halting problem is undecidable using proof by contradiction.",
+      "Derive the closed-form solution for the Fibonacci sequence using generating functions.",
+      "Prove the correctness of Dijkstra's algorithm using a loop invariant over the priority queue.",
+      "Analyze the amortized complexity of a dynamic array with doubling strategy using the potential method.",
+      "Prove that every continuous function on a closed interval achieves its maximum using the Bolzano-Weierstrass theorem.",
+      "Derive the backpropagation equations for a convolutional neural network layer with max pooling."
+    ]
+  },
+  "provenance": "Anchors are the reference router's DEFAULT_ANCHORS (seed set used during fine-tuning). Held-out evaluation questions are authored separately and are NOT drawn from training data."
+}

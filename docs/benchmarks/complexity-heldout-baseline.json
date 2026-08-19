@@ -1,0 +1,43 @@
+{
+  "accuracy": 0.625,
+  "classifier": "classifiers/complexity.json",
+  "confusion": [
+    [
+      20,
+      0,
+      0,
+      0
+    ],
+    [
+      13,
+      7,
+      0,
+      0
+    ],
+    [
+      3,
+      3,
+      14,
+      0
+    ],
+    [
+      8,
+      3,
+      0,
+      9
+    ]
+  ],
+  "dataset": "evals/datasets/complexity-heldout.jsonl",
+  "hard_case_accuracy": 0.65,
+  "labels": [
+    "SIMPLE",
+    "MEDIUM",
+    "COMPLEX",
+    "REASONING"
+  ],
+  "latency_p50_ms": 21.653,
+  "latency_p99_ms": 23.905,
+  "macro_f1": 0.623365372794886,
+  "model": "artifacts/models/baseline-minilm",
+  "n": 80
+}

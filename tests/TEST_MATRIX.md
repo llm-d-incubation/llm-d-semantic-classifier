@@ -61,10 +61,18 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | U-083 | session_id is never metric label | 0.20 |
 | U-084 | request_id cannot create metric cardinality | 0.20 |
 | U-085 | raw prompt absent from default logs/metrics | 0.1 |
+| U-086 | per-stage percentiles separate workloads with identical means | 0.1 |
+| U-087 | reported quantiles within documented bucket error | 0.1 |
+| U-088 | histogram bucket index and lower bound are consistent | 0.1 |
+| U-089 | empty latency stage reports zero, not a misleading value | 0.1 |
 | U-090 | active model handle immutable | 0.24 |
 | U-091 | candidate loads/warms before activation | 0.24 |
 | U-092 | old in-flight request completes on old handle during swap | 0.24 |
 | U-093 | failed candidate leaves previous active revision untouched | 0.24 |
+| U-100 | every built-in classifier definition parses and validates | 0.1 |
+| U-101 | the default classifier is a built-in | 0.1 |
+| U-102 | a label with no anchors is rejected at load | 0.1 |
+| U-103 | unknown classifier name rejected, listing available names | 0.1 |
 
 ## Protocol/integration
 
@@ -110,6 +118,12 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | I-065 | mutable `latest` rejected in production test profile | 0.20 |
 | I-070 | active revision switch sends new calls to new handle | 0.24 |
 | I-071 | old in-flight call drains on old revision | 0.24 |
+| I-072 | served response carries real taxonomy labels and revisions | 0.1 |
+| I-073 | served ranking is semantically correct, not merely populated | 0.1 |
+| I-074 | custom classifier definition supplied by path is served | 0.1 |
+| I-090 | executor workers run forwards in parallel, not merely admit them | 0.1 |
+| I-091 | single-worker executor is observably serial (control for I-090) | 0.1 |
+| I-092 | accept counter observes reconnection (control for I-002) | 0.1 |
 | I-080 | latency decomposition metrics visible | 0.1 |
 | I-081 | overload counter increments | 0.20 |
 | I-085 | trace capture has IDs/hashes but no raw prompt | 0.1 |

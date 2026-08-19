@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Parity suite: fetches the pinned model then runs the ignored-by-default
-# model-dependent tests. Required for AC-004 GREEN and promotion CI.
+# Parity suite: fetches the pinned classifier artifacts then runs the
+# ignored-by-default model-dependent tests. Required for AC-004 GREEN and
+# promotion CI.
+#
+# Fetches every classifier the ignored tests actually exercise. Fetching only
+# the default would leave the sensitivity and complexity suites failing on a
+# missing artifact rather than on a real defect.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-./hack/fetch-model
+./hack/fetch-model --classifier complexity
+./hack/fetch-model --classifier sensitivity
 cargo test --locked -- --ignored
