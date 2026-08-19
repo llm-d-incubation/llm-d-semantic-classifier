@@ -46,7 +46,7 @@
  "AC-006": {
   "I-030": "green",
   "P-001": "green",
-  "P-002": "pending",
+  "P-002": "green",
   "U-040": "green"
  },
  "AC-007": {
@@ -57,8 +57,8 @@
  "AC-008": {
   "I-035": "green",
   "P-020": "green",
-  "P-021": "pending",
-  "P-023": "pending",
+  "P-021": "green",
+  "P-023": "green",
   "U-030": "green",
   "U-031": "green"
  },

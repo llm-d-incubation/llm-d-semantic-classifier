@@ -1,10 +1,10 @@
 {
   "schema_version": "0.1",
-  "classifier_id": "semantic-routing-sensitivity",
+  "classifier_id": "sensitivity",
   "source": {
     "type": "huggingface",
-    "repo": "cnuland/semantic-routing-sensitivity",
-    "revision": "43f21d21ac48134464f8510a9ac9c95bdac7ba86"
+    "repo": "cnuland/llm-d-sc-sensitivity",
+    "revision": "d82ff10d41fcf7d33f90e0597e6621bf1ff94ed4"
   },
   "runtime": {
     "backend": "candle",
@@ -16,8 +16,21 @@
     "pooling_config": "/models/1_Pooling/config.json"
   },
   "classification": {
-    "strategy": "prototype_cosine_similarity",
-    "taxonomy_revision": "VERIFY-BEFORE-GOLDEN-CLASSIFICATION",
-    "prototype_revision": "VERIFY-BEFORE-GOLDEN-CLASSIFICATION"
+    "strategy": "anchor_topk_mean_cosine",
+    "taxonomy_revision": "sensitivity-anchors-v1",
+    "definition": "compiled-in (classifiers/sensitivity.json); override with LLM_D_SC_CLASSIFIER",
+    "labels": [
+      "PUBLIC",
+      "INTERNAL",
+      "CONFIDENTIAL",
+      "REGULATED",
+      "NEVER_EGRESS"
+    ],
+    "top_k": 3
+  },
+  "integrity": {
+    "digest_algorithm": "blake3",
+    "digest_scope": "required files, hashed individually then combined as sorted name:hash lines",
+    "recorded_at": "warmup (see runtime::modelcar_digest, I-062)"
   }
 }

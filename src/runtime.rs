@@ -18,6 +18,43 @@ pub const MODELCAR_REQUIRED_FILES: &[&str] = &[
     "1_Pooling/config.json",
 ];
 
+/// A content digest over the resident ModelCar's required files.
+///
+/// `model_revision` records which revision was REQUESTED. It cannot show that
+/// the bytes on disk are the bytes that revision names: a mount can be stale, a
+/// layer can be rebuilt, a file can be truncated mid-copy. The digest is over
+/// actual content, so a served classification can be tied to the exact weights
+/// that produced it (AC-003 / I-062).
+///
+/// Files are hashed individually and then combined as `name:hash` lines in
+/// sorted order, so the result is independent of directory iteration order and
+/// a rename is as visible as an edit.
+pub fn modelcar_digest<P: AsRef<Path>>(
+    model_dir: P,
+    required_files: &[&str],
+) -> Result<String, String> {
+    let dir = model_dir.as_ref();
+    let mut entries: Vec<(String, String)> = Vec::with_capacity(required_files.len());
+    for name in required_files {
+        let path = dir.join(name);
+        let mut hasher = blake3::Hasher::new();
+        let mut file = std::fs::File::open(&path)
+            .map_err(|e| format!("cannot read {} for digest: {e}", path.display()))?;
+        std::io::copy(&mut file, &mut hasher)
+            .map_err(|e| format!("cannot hash {}: {e}", path.display()))?;
+        entries.push((name.to_string(), hasher.finalize().to_hex().to_string()));
+    }
+    entries.sort();
+    let mut combined = blake3::Hasher::new();
+    for (name, hash) in &entries {
+        combined.update(name.as_bytes());
+        combined.update(b":");
+        combined.update(hash.as_bytes());
+        combined.update(b"\n");
+    }
+    Ok(format!("blake3:{}", combined.finalize().to_hex()))
+}
+
 /// Readiness gate for the resident runtime.
 ///
 /// Starts NOT ready and only flips to READY after a successful warmup.
@@ -44,6 +81,7 @@ pub struct Runtime {
     resident_tokenizer: Option<Tokenizer>,
     active_revision: Option<String>,
     tokenizer_load_count: u64,
+    artifact_digest: Option<String>,
 }
 
 impl Runtime {
@@ -54,6 +92,7 @@ impl Runtime {
             resident_tokenizer: None,
             active_revision: None,
             tokenizer_load_count: 0,
+            artifact_digest: None,
         }
     }
 
@@ -98,7 +137,15 @@ impl Runtime {
                 ));
             }
         }
+        // Record the content digest of what was actually loaded, not what was
+        // requested. Computed once at warmup, never per request.
+        self.artifact_digest = Some(modelcar_digest(path, required_files)?);
         self.warmup(path)
+    }
+
+    /// The content digest of the resident ModelCar, once warmed.
+    pub fn artifact_digest(&self) -> Option<&str> {
+        self.artifact_digest.as_deref()
     }
 
     /// Load the tokenizer for the active `revision` and hold it resident.
