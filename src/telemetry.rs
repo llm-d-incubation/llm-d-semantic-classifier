@@ -41,22 +41,85 @@ pub struct RequestEvent {
 ///
 /// [`Clone`] shares the same underlying capture via [`Arc`]`<Mutex<_>>`, so the
 /// pipeline and its server observe the same trace.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Telemetry {
-    events: Arc<Mutex<Vec<TraceEvent>>>,
+    events: Arc<Mutex<std::collections::VecDeque<TraceEvent>>>,
+    capacity: usize,
 }
 
+impl Default for Telemetry {
+    fn default() -> Self {
+        Self::with_capacity(DEFAULT_TRACE_CAPACITY)
+    }
+}
+
+/// Maximum retained trace events.
+///
+/// The capture is a bounded RING, not a log. `record_request` runs on the
+/// production classify path for every request, so an unbounded store here grows
+/// linearly with total requests served and the process eventually exhausts
+/// memory while doing nothing wrong. The result cache being bounded does not
+/// help: this is a separate allocation on the same path.
+///
+/// A ring is the right shape rather than a compromise. This capture exists to
+/// answer "what did the last N requests look like", which is what an operator
+/// debugging live traffic actually asks. Retaining everything answers a question
+/// nobody asks and cannot be served from memory anyway.
+pub const DEFAULT_TRACE_CAPACITY: usize = 1024;
+
+/// Environment variable overriding the retained trace-event count.
+pub const TRACE_CAPACITY_ENV: &str = "LLM_D_SC_TRACE_CAPACITY";
+
 impl Telemetry {
-    /// An empty telemetry recorder.
+    /// An empty telemetry recorder with the default bound.
     pub fn new() -> Self {
-        Self::default()
+        let capacity = std::env::var(TRACE_CAPACITY_ENV)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(DEFAULT_TRACE_CAPACITY);
+        Self::with_capacity(capacity)
+    }
+
+    /// An empty recorder retaining at most `capacity` events.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Telemetry {
+            events: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// Number of retained trace events. Never exceeds the configured capacity.
+    pub fn len(&self) -> usize {
+        self.events.lock().unwrap().len()
+    }
+
+    /// True when nothing has been recorded.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Record a request event, hashing the context and session so no raw text is
     /// retained in default output (AC-014).
     pub fn record_request(&self, event: RequestEvent) {
-        self.events.lock().unwrap().push(TraceEvent {
-            request_id: event.request_id,
+        // `request_id` is caller-supplied, so an unbounded id would let a client
+        // control how much memory each retained event costs. Bounding the event
+        // COUNT alone bounds growth; bounding the id too bounds the constant.
+        let mut request_id = event.request_id;
+        if request_id.len() > MAX_REQUEST_ID_BYTES {
+            request_id.truncate(
+                (0..=MAX_REQUEST_ID_BYTES)
+                    .rev()
+                    .find(|i| request_id.is_char_boundary(*i))
+                    .unwrap_or(0),
+            );
+        }
+        let mut events = self.events.lock().unwrap();
+        while events.len() >= self.capacity {
+            events.pop_front();
+        }
+        events.push_back(TraceEvent {
+            request_id,
             context_hash: format!("ctx_{}", hash(&event.context)),
             session_hash: format!("sess_{}", hash(&event.session_id)),
         });
@@ -78,13 +141,108 @@ impl Telemetry {
 
     /// A copy of the captured trace events.
     pub fn trace_capture(&self) -> Vec<TraceEvent> {
-        self.events.lock().unwrap().clone()
+        self.events.lock().unwrap().iter().cloned().collect()
     }
 }
+
+/// Maximum retained bytes of a caller-supplied request id.
+const MAX_REQUEST_ID_BYTES: usize = 256;
 
 /// A short blake3 hex digest of `s`, so telemetry never carries raw text.
 fn hash(s: &str) -> String {
     blake3::hash(s.as_bytes()).to_hex()[..16].to_string()
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::*;
+
+    /// U-130 (AC-014): trace capture must not grow without bound.
+    ///
+    /// `record_request` runs on the production classify path for every request,
+    /// so an unbounded store grows linearly with total requests served and the
+    /// process eventually exhausts memory while behaving correctly. No
+    /// functional test can see this: every classification still returns the
+    /// right answer. Only asserting on retention can.
+    #[test]
+    fn u130_trace_capture_is_bounded_under_sustained_load() {
+        const CAPACITY: usize = 1024;
+        const REQUESTS: usize = 100_000;
+        let telemetry = Telemetry::with_capacity(CAPACITY);
+
+        for i in 0..REQUESTS {
+            telemetry.record_request(RequestEvent {
+                request_id: format!("req-{i}"),
+                session_id: format!("sess-{}", i % 7),
+                context: format!("prompt number {i}"),
+            });
+        }
+
+        assert_eq!(
+            telemetry.len(),
+            CAPACITY,
+            "after {REQUESTS} requests the capture holds {} events with a bound of {CAPACITY}",
+            telemetry.len()
+        );
+        assert_eq!(telemetry.trace_capture().len(), CAPACITY);
+    }
+
+    /// U-131: the ring retains the MOST RECENT events, not the first ones.
+    ///
+    /// A bound that kept the oldest entries would be bounded and useless: an
+    /// operator debugging live traffic needs the last N requests, not the first
+    /// N the process ever saw.
+    #[test]
+    fn u131_capture_retains_the_most_recent_events() {
+        let telemetry = Telemetry::with_capacity(3);
+        for i in 0..10 {
+            telemetry.record_request(RequestEvent {
+                request_id: format!("req-{i}"),
+                session_id: "s".into(),
+                context: "c".into(),
+            });
+        }
+        let ids: Vec<String> = telemetry.trace_capture().into_iter().map(|e| e.request_id).collect();
+        assert_eq!(ids, vec!["req-7", "req-8", "req-9"]);
+    }
+
+    /// U-132: a caller-supplied request id cannot dictate retained memory.
+    ///
+    /// Bounding the event COUNT bounds growth; without also bounding the id, a
+    /// client could still choose how many bytes each retained event costs.
+    #[test]
+    fn u132_oversized_request_id_is_truncated() {
+        let telemetry = Telemetry::with_capacity(4);
+        telemetry.record_request(RequestEvent {
+            request_id: "x".repeat(1_000_000),
+            session_id: "s".into(),
+            context: "c".into(),
+        });
+        let ev = telemetry.trace_capture().pop().expect("one event");
+        assert!(
+            ev.request_id.len() <= MAX_REQUEST_ID_BYTES,
+            "retained request id is {} bytes",
+            ev.request_id.len()
+        );
+    }
+
+    /// U-133: multibyte ids are truncated on a character boundary, not mid-glyph.
+    #[test]
+    fn u133_truncation_respects_character_boundaries() {
+        let telemetry = Telemetry::with_capacity(2);
+        telemetry.record_request(RequestEvent {
+            // 3 bytes per character, so a byte-wise cut would split one.
+            request_id: "\u{65e5}".repeat(1000),
+            session_id: "s".into(),
+            context: "c".into(),
+        });
+        let ev = telemetry.trace_capture().pop().expect("one event");
+        assert!(ev.request_id.len() <= MAX_REQUEST_ID_BYTES);
+        assert!(
+            ev.request_id.chars().all(|c| c == '\u{65e5}'),
+            "truncation must not corrupt a multibyte character"
+        );
+    }
 }
 
 #[cfg(test)]
