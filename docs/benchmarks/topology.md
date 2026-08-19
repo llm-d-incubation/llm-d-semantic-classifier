@@ -34,3 +34,34 @@ the cheaper-looking topology buys nothing measurable.
 would not survive a slower node or a CPU limit, which is why the pod-CPU-limit gap is tracked.
 
 Produced on one contributor's homelab and not independently reproduced.
+
+## Where the time actually goes
+
+The server logs its per-stage decomposition (S-080). Measured in-cluster over 132 served
+requests:
+
+| Stage | p50 | p99 | Share of a cache miss |
+|---|---:|---:|---:|
+| network, ClusterIP hop | 22 us | - | 0.18% |
+| queue, bounded handoff | 2 us | 64 us | 0.02% |
+| tokenize | 56 us | 96 us | 0.46% |
+| **model forward** | **12.29 ms** | **14.34 ms** | **99.4%** |
+
+**Everything that is not the model is under one percent of latency.** The bounded handoff, the
+result cache, the tokenizer, and the Service network path are collectively about 80
+microseconds of a 12.3 millisecond request.
+
+Two consequences worth stating plainly:
+
+Optimisation effort belongs in the forward, which means the model, the quantisation, and the
+hardware. Tuning the queue, the cache implementation, or the transport cannot produce a
+measurable improvement, because there is under 1% available to win.
+
+The architecture's admission control is effectively free. A bounded queue that costs 2
+microseconds at p50 is not a latency trade for safety under load; it is safety at no cost.
+
+Note the `total p50` of 1 microsecond against a `forward p50` of 12.29 milliseconds. That is
+not an inconsistency: total is recorded for EVERY request and most requests were cache hits,
+so its median is a hit while the forward median is necessarily a miss. It is a direct
+illustration of the cache doing its job, visible only because the stages are reported as
+distributions rather than as means.

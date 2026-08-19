@@ -110,9 +110,23 @@ fi
 # ---- S-080: system evidence distinguishes RTT from queue and forward ---------
 # External RTT comes from the probe; the internal decomposition is logged by the
 # server. Both must be present, and the forward must be a real fraction of RTT.
-LOGLINE=$(oc -n "$NS" logs deploy/llm-d-sc -c llm-d-sc --tail=200 2>/dev/null | grep 'llm-d-sc metrics:' | tail -1)
+# The log is emitted on an interval and only when requests have actually been
+# served, so an idle service stays quiet. Generate traffic first, then wait for
+# the next emission rather than sampling once and calling a quiet service broken.
+oc -n "$NS" run probe-s080 --rm -i --restart=Never \
+  --image="$(oc -n "$NS" get istag llm-d-sc:latest -o jsonpath='{.image.dockerImageReference}')" \
+  --command -- /usr/local/bin/llm-d-sc-gateway-probe --target llm-d-sc:50051 \
+  --topology s080 --samples 40 >/dev/null 2>&1
+LOGLINE=""
+for _ in $(seq 1 15); do
+  LOGLINE=$(oc -n "$NS" logs deploy/llm-d-sc -c llm-d-sc --tail=200 2>/dev/null | grep 'llm-d-sc metrics:' | tail -1)
+  [ -n "$LOGLINE" ] && break
+  sleep 5
+done
 if [ -n "$LOGLINE" ] && echo "$LOGLINE" | grep -q 'forward p50' && echo "$LOGLINE" | grep -q 'queue p50'; then
-  record S-080 PASS "server logs stage decomposition: ${LOGLINE##*| forward}"
+  # Record the WHOLE line. Trimming it to the forward stage discarded the queue
+  # and tokenize numbers, which are precisely what S-080 asks to distinguish.
+  record S-080 PASS "${LOGLINE#*llm-d-sc metrics: }"
 else
   record S-080 FAIL "no stage-decomposition log line observed"
 fi
