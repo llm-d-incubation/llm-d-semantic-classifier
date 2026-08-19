@@ -28,13 +28,22 @@ echo "[cluster-evidence] namespace $NS"
 # Wait for a READY pod, not merely a Running one. A pod can be phase=Running
 # while its container is still initialising, and the exec then returns empty --
 # which reads as "uid unknown" and fails a check that should have waited.
-oc -n "$NS" wait --for=condition=Ready pod -l app=llm-d-sc --timeout=300s >/dev/null 2>&1
-POD=$(oc -n "$NS" get pods -l app=llm-d-sc -o name 2>/dev/null | head -1)
+# Select a pod that is ACTUALLY Ready. During a rollout there are two pods, and
+# `wait` can return satisfied by the outgoing one while `head -1` then picks the
+# incoming one that has no container yet -- which is how this reported an empty
+# uid AND an empty scc, values a running container can never have. An empty
+# reading is a selection bug, not a finding.
+oc -n "$NS" rollout status deploy/llm-d-sc --timeout=300s >/dev/null 2>&1
+POD=$(oc -n "$NS" get pods -l app=llm-d-sc \
+        -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{" "}{.status.containerStatuses[0].ready}{"\n"}{end}' 2>/dev/null \
+      | awk '$2=="true"{print "pod/"$1; exit}')
 if [ -n "$POD" ]; then
   UID_OBSERVED=$(oc -n "$NS" exec "$POD" -c llm-d-sc -- id -u 2>/dev/null | tr -d '\r\n')
   NONROOT=$(oc -n "$NS" get "$POD" -o jsonpath='{.spec.containers[0].securityContext.runAsNonRoot}' 2>/dev/null)
   SCC=$(oc -n "$NS" get "$POD" -o jsonpath='{.metadata.annotations.openshift\.io/scc}' 2>/dev/null)
-  if [ -n "$UID_OBSERVED" ] && [ "$UID_OBSERVED" != "0" ]; then
+  if [ -z "$UID_OBSERVED" ]; then
+    record S-010 FAIL "could not read a uid from $POD; the check selected a pod with no running container"
+  elif [ "$UID_OBSERVED" != "0" ]; then
     record S-010 PASS "runs as uid $UID_OBSERVED (non-root, runAsNonRoot=$NONROOT) under scc '$SCC'"
   else
     record S-010 FAIL "observed uid '$UID_OBSERVED' under scc '$SCC'"
