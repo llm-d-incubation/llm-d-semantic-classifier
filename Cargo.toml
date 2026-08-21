@@ -36,7 +36,14 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"]
 tokio-stream = "0.1"
 tonic-prost = "0.14"
 blake3 = "1.8.6"
-tokenizers = "0.23.1"
+# default-features = false drops three build-time dependencies we never use:
+# esaxx-rs (C++, only needed by the unigram TRAINER), onig (C oniguruma), and
+# indicatif (progress bars). We only load a pretrained tokenizer.json via
+# Tokenizer::from_file, so none of them are reachable. Keeping them made a
+# working C++ toolchain a hard build requirement and broke contributors on
+# recent macOS/Xcode. A regex backend is mandatory, so fancy-regex (pure Rust)
+# replaces onig (C). The result needs no C or C++ toolchain at all.
+tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-regex"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"
