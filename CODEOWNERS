@@ -6,6 +6,11 @@
 # The wire contract, the specification record, and the architecture decisions
 # change the project's external commitments — always maintainer-reviewed.
 /proto/            @cnuland
+# Anchor definitions are behaviour, not data: they are compiled into the binary
+# via include_str! and their taxonomy_revision participates in the result cache
+# key, so a change here changes what the service returns and invalidates cached
+# classifications.
+/classifiers/      @cnuland
 /specs/            @cnuland
 /docs/decisions/   @cnuland
 /SECURITY.md       @cnuland
