@@ -52,10 +52,13 @@ impl ClassifierRuntime for SlowClassifier {
         }
     }
 
-    // This test double overrides `classify` directly to control the forward
-    // delay; `embed`/`rank` are never reached.
+    // The slow model forward runs in `embed` — on the dedicated inference
+    // executor thread — so admitted work stays in-flight and the bounded queue
+    // saturates. `ServiceCore` drives the runtime as `embed` then `rank`, so the
+    // delay must live here rather than in `classify`.
     fn embed(&self, _input: &ClassificationInput) -> Result<Embedding, ClassifyError> {
-        unimplemented!("SlowClassifier overrides classify directly")
+        std::thread::sleep(self.forward_delay);
+        Ok(Embedding::new(vec![0.0]))
     }
 
     fn rank(
@@ -63,12 +66,6 @@ impl ClassifierRuntime for SlowClassifier {
         _embedding: &Embedding,
         _input: &ClassificationInput,
     ) -> Result<ClassificationResult, ClassifyError> {
-        unimplemented!("SlowClassifier overrides classify directly")
-    }
-
-    fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
-        std::thread::sleep(self.forward_delay);
-        let _ = input;
         Ok(ClassificationResult {
             classifier_id: "slow-classifier".to_string(),
             model_revision: "slow-model".to_string(),
