@@ -83,7 +83,7 @@ impl Embedding {
 }
 
 /// One ranked semantic signal: an id and its deterministic similarity score.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RankedSignal {
     pub id: String,
     pub score: f64,
@@ -95,7 +95,7 @@ pub struct RankedSignal {
 /// (model/tokenizer/taxonomy) that reproduce the result, the ranked signals,
 /// and a [`ClassifyStatus`]. It NEVER contains a route/endpoint field — routing
 /// authority is the AI Gateway (AC-010).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClassificationResult {
     pub classifier_id: String,
     pub model_revision: String,
@@ -110,7 +110,7 @@ pub struct ClassificationResult {
 /// `Ok` is a real ranked result; `Abstain` is "insufficient context where
 /// required — do not fabricate a label"; `Error` is an explicit failure (the
 /// typed error detail travels via [`ClassifyError`] on the `Result`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ClassifyStatus {
     Ok,
     Abstain,
