@@ -62,6 +62,26 @@ pub struct ClassificationInput {
     pub session_metadata: HashMap<String, String>,
 }
 
+/// A classifier-produced embedding: the L2-normalized vector the ranker and the
+/// semantic cache both consume. Produced exactly once per classification so the
+/// (expensive) model forward is never repeated for a cache lookup.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Embedding {
+    pub vector: Vec<f32>,
+}
+
+impl Embedding {
+    /// Wrap a raw embedding vector.
+    pub fn new(vector: Vec<f32>) -> Self {
+        Embedding { vector }
+    }
+
+    /// The embedding dimension.
+    pub fn dim(&self) -> usize {
+        self.vector.len()
+    }
+}
+
 /// One ranked semantic signal: an id and its deterministic similarity score.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RankedSignal {
@@ -969,5 +989,12 @@ mod tests {
             Err(other) => panic!("must be an actionable unavailable error, got {other:?}"),
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn embedding_reports_its_dimension() {
+        let e = Embedding::new(vec![0.0, 1.0, 0.0]);
+        assert_eq!(e.dim(), 3);
+        assert_eq!(e.vector, vec![0.0, 1.0, 0.0]);
     }
 }
