@@ -77,6 +77,10 @@ impl RedisSemanticCache {
     ) -> Result<T, String> {
         let mut conn = self.pool.get().map_err(|e| e.to_string())?;
         let timeout = Duration::from_millis(self.timeout_ms);
+        // Best-effort: if the underlying socket refuses the timeout setting,
+        // tolerate it rather than failing the request — the per-op timeout is
+        // a defense-in-depth guard, not the only thing standing between a
+        // hung Redis and the caller (the circuit breaker is the backstop).
         conn.set_read_timeout(Some(timeout)).ok();
         conn.set_write_timeout(Some(timeout)).ok();
         f(&mut conn).map_err(|e| e.to_string())
@@ -86,6 +90,9 @@ impl RedisSemanticCache {
 impl SemanticCache for RedisSemanticCache {
     fn lookup(&self, embedding: &Embedding, identity: &str) -> Option<ClassificationResult> {
         if !self.breaker.allow() {
+            // An open breaker means Redis is treated as unavailable right
+            // now: count it as a degraded L2 op, same as a real failure.
+            self.metrics.record_l2_degraded();
             return None;
         }
         let blob = vector_to_bytes(&embedding.vector);
@@ -150,6 +157,9 @@ impl SemanticCache for RedisSemanticCache {
 
     fn insert(&self, embedding: &Embedding, result: &ClassificationResult, identity: &str) {
         if !self.breaker.allow() {
+            // An open breaker means Redis is treated as unavailable right
+            // now: count it as a degraded L2 op, same as a real failure.
+            self.metrics.record_l2_degraded();
             return;
         }
         let blob = vector_to_bytes(&embedding.vector);
@@ -157,7 +167,9 @@ impl SemanticCache for RedisSemanticCache {
         let payload = encode_result(result);
         let key = format!("sc:{identity}:{}", blake3::hash(&blob).to_hex());
         let ttl = self.ttl_secs;
-        let identity = identity.to_string();
+        // `with_timeout_conn` runs `f` synchronously in this same call (no
+        // spawned thread), so the closure can borrow `identity` directly —
+        // no need to own a cloned String.
         let outcome = self.with_timeout_conn(move |conn| {
             // Create the index lazily now that the vector dimension is known.
             // Ignore the result: an "already exists" error (or any other
@@ -189,7 +201,7 @@ impl SemanticCache for RedisSemanticCache {
             redis::cmd("HSET")
                 .arg(&key)
                 .arg("identity")
-                .arg(&identity)
+                .arg(identity)
                 .arg("payload")
                 .arg(&payload)
                 .arg("vec")

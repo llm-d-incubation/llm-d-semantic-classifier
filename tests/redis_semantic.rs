@@ -51,35 +51,48 @@ fn lookup_is_fail_open_when_redis_is_unreachable() {
 
 #[test]
 fn breaker_open_short_circuits_without_calling_redis() {
-    // Every lookup that actually reaches (and fails against) Redis records a
-    // degraded outcome. Once the breaker opens, further lookups must still
-    // fail open (None) but must NOT record another degraded outcome — that
-    // is the observable proof that the open breaker short-circuited BEFORE
-    // attempting Redis, rather than trying and failing again.
+    // Every lookup that reaches (and fails against) Redis records a degraded
+    // outcome, and — this is the fix under test — so does every lookup that
+    // is short-circuited by an open breaker: an open breaker is a degraded
+    // L2 op, not a free miss. Deterministic (metric-based, not
+    // timing-based): the degraded counter must advance by exactly one per
+    // call in both phases.
     let metrics = Metrics::new();
     let cache = RedisSemanticCache::connect(&cfg("redis://127.0.0.1:1"), metrics.clone())
         .expect("connect (lazy) must succeed even though the address is dead");
     let e = Embedding::new(vec![0.1, 0.2, 0.3]);
 
-    // Drive the breaker open (failure_threshold is 5, see RedisSemanticCache::connect).
+    // Phase 1: drive the breaker open (failure_threshold is 5, see
+    // RedisSemanticCache::connect). Each of these calls actually reaches
+    // (and fails against) the dead address, recording one degraded outcome
+    // apiece.
     for _ in 0..5 {
         assert!(cache.lookup(&e, "complexity|m|t|x").is_none());
     }
     let degraded_at_open = metrics.snapshot().l2_degraded;
-    assert!(
-        degraded_at_open >= 5,
-        "each failed Redis attempt before the breaker opens must record a degraded outcome"
+    assert_eq!(
+        degraded_at_open, 5,
+        "each of the 5 failed Redis attempts before the breaker opens must record a degraded outcome"
     );
 
-    // Once open, further lookups must short-circuit: still None, but the
-    // degraded counter must stop moving because Redis is never contacted.
-    for _ in 0..5 {
+    // Phase 2: once open, further lookups short-circuit BEFORE touching
+    // Redis, but must still count as degraded — exactly one per call.
+    for i in 1..=5u64 {
         assert!(cache.lookup(&e, "complexity|m|t|x").is_none());
+        assert_eq!(
+            metrics.snapshot().l2_degraded,
+            degraded_at_open + i,
+            "an open breaker must record exactly one degraded outcome per short-circuited lookup"
+        );
     }
+
+    // Phase 3: `insert` must apply the same breaker-open accounting.
+    let before_insert = metrics.snapshot().l2_degraded;
+    cache.insert(&e, &result("SIMPLE"), "complexity|m|t|x");
     assert_eq!(
         metrics.snapshot().l2_degraded,
-        degraded_at_open,
-        "an open breaker must short-circuit without attempting Redis (no new degraded records)"
+        before_insert + 1,
+        "insert must also record a degraded outcome when short-circuited by an open breaker"
     );
 }
 
