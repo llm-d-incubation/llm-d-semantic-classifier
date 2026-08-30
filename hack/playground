@@ -67,6 +67,14 @@ if command -v docker >/dev/null 2>&1; then
     [ "$ready" -eq 1 ] && log "Redis ready." \
       || { warn "Redis did not become ready; falling back to L1-exact only."; CACHE_STRATEGY="exact"; }
   fi
+
+  # Start every session with an empty cache. A reused Redis container can hold
+  # cached entries from a previous run, which would make the first prompts read
+  # as hits instead of a clean compute miss — flush so the demo starts fresh.
+  if [ "$CACHE_STRATEGY" = "redis-semantic" ]; then
+    log "flushing Redis for a clean cache…"
+    docker exec "$REDIS_NAME" redis-cli FLUSHALL >/dev/null 2>&1 || true
+  fi
 else
   warn "docker not found — running L1-exact only (no semantic hits to demo)."
   warn "Install Docker and re-run to see L2 semantic hits."
