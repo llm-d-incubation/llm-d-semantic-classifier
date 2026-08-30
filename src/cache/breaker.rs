@@ -21,7 +21,10 @@ impl CircuitBreaker {
         CircuitBreaker {
             failure_threshold: failure_threshold.max(1),
             cooldown,
-            state: Mutex::new(State { consecutive_failures: 0, open_until: None }),
+            state: Mutex::new(State {
+                consecutive_failures: 0,
+                open_until: None,
+            }),
         }
     }
 
