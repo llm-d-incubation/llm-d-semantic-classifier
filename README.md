@@ -176,6 +176,21 @@ REDIS_URL=redis://127.0.0.1:6379 cargo test --test redis_semantic -- --ignored
 `REDIS_URL` above only configures that test run; the running service reads
 `LLM_D_SC_REDIS_URL` instead.
 
+Two operational constraints apply when the semantic tier is enabled. Both are
+fail-open (they degrade to the normal compute path and never produce a wrong
+label), but they are silent, so plan for them:
+
+- **One embedding dimension per Redis instance.** The vector index is created
+  lazily with the embedding dimension of the first entry written. A classifier
+  whose embeddings have a different dimension, pointed at the same Redis, simply
+  gets no L2 benefit (its writes fail to index and its lookups miss). Give
+  classifiers with different embedding dimensions separate Redis instances.
+- **Keep cache-identity fields comma-free.** Entries are isolated by an identity
+  tag built from the classifier id and the model, tokenizer, and taxonomy
+  revisions, so one classifier or revision never reuses another's labels. That
+  isolation relies on those fields not containing a comma (the tag separator);
+  the built-in classifiers and revision fingerprints already satisfy this.
+
 **4. Call it over gRPC.** The bundled gateway stand-in issues a real call over a
 persistent channel, consumes the signals, and applies its own test-only policy
 afterwards, demonstrating that routing authority stays outside this service:
