@@ -598,6 +598,9 @@ mod tests {
             total: std::time::Duration::ZERO,
             cache_hits: hits,
             cache_misses: misses,
+            l2_hits: 0,
+            l2_misses: 0,
+            l2_degraded: 0,
         }
     }
 

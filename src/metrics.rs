@@ -139,6 +139,12 @@ pub struct MetricsSnapshot {
     pub cache_hits: u64,
     /// Number of classification requests that ran a real forward (cache miss).
     pub cache_misses: u64,
+    /// Number of L2 cache hits.
+    pub l2_hits: u64,
+    /// Number of L2 cache misses.
+    pub l2_misses: u64,
+    /// Number of L2 degraded responses.
+    pub l2_degraded: u64,
 }
 
 /// The shared latency/counter registry behind the metrics surface.
@@ -159,6 +165,9 @@ struct Inner {
     total: Duration,
     cache_hits: u64,
     cache_misses: u64,
+    l2_hits: u64,
+    l2_misses: u64,
+    l2_degraded: u64,
     hist_queue: Histogram,
     hist_tokenize: Histogram,
     hist_forward: Histogram,
@@ -218,6 +227,21 @@ impl Metrics {
         self.inner.lock().unwrap().cache_misses += 1;
     }
 
+    /// Record one L2 cache hit.
+    pub fn record_l2_hit(&self) {
+        self.inner.lock().unwrap().l2_hits += 1;
+    }
+
+    /// Record one L2 cache miss.
+    pub fn record_l2_miss(&self) {
+        self.inner.lock().unwrap().l2_misses += 1;
+    }
+
+    /// Record one L2 degraded response.
+    pub fn record_l2_degraded(&self) {
+        self.inner.lock().unwrap().l2_degraded += 1;
+    }
+
     /// An immutable snapshot of the accumulated latency decomposition.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let inner = self.inner.lock().unwrap();
@@ -228,6 +252,9 @@ impl Metrics {
             total: inner.total,
             cache_hits: inner.cache_hits,
             cache_misses: inner.cache_misses,
+            l2_hits: inner.l2_hits,
+            l2_misses: inner.l2_misses,
+            l2_degraded: inner.l2_degraded,
         }
     }
 }
@@ -376,5 +403,19 @@ mod tests {
         assert_eq!(snap.cache_hits, 2);
         assert_eq!(snap.cache_misses, 1);
         assert_eq!(snap.cache_hits + snap.cache_misses, 3);
+    }
+
+    /// L2 counters increment independently.
+    #[test]
+    fn l2_counters_increment_independently() {
+        let m = Metrics::new();
+        m.record_l2_hit();
+        m.record_l2_hit();
+        m.record_l2_miss();
+        m.record_l2_degraded();
+        let s = m.snapshot();
+        assert_eq!(s.l2_hits, 2);
+        assert_eq!(s.l2_misses, 1);
+        assert_eq!(s.l2_degraded, 1);
     }
 }
