@@ -147,6 +147,35 @@ are comparable WITHIN one response, which is what makes the margin between the
 top two labels meaningful, but they are not calibrated across models or
 taxonomies and should not be read as confidence in a statistical sense.
 
+**Optional: semantic result cache.** Off by default. The built-in exact-match
+cache only reuses a label for the identical text. Setting `LLM_D_SC_CACHE=redis-semantic`
+adds an optional L2 tier behind it: on an exact-cache miss, after the prompt is
+embedded, a semantically similar prior prompt reuses its stored label instead of
+re-ranking. It requires a running
+[Redis Stack](https://redis.io/docs/latest/operate/oss_and_stack/install/install-stack/)
+(RediSearch) instance and is a best-effort accelerator, not a source of truth: a
+slow or unreachable Redis degrades to the normal compute path (fail-open) and
+never fails the request.
+
+| Env var | Meaning | Default |
+| --- | --- | --- |
+| `LLM_D_SC_CACHE` | Cache strategy: `exact` or `redis-semantic` | `exact` |
+| `LLM_D_SC_REDIS_URL` | Redis Stack URL (e.g. `redis://127.0.0.1:6379`); used only when the strategy is `redis-semantic` | none; required when `redis-semantic` |
+| `LLM_D_SC_CACHE_THRESHOLD` | Cosine similarity gate for a semantic hit; higher is safer but reuses less | `0.90` |
+| `LLM_D_SC_CACHE_TTL` | Cached-label time-to-live, in seconds | `86400` |
+| `LLM_D_SC_CACHE_TIMEOUT_MS` | Per-Redis-operation timeout, in milliseconds | `50` |
+
+To run the live Redis integration tests locally (`#[ignore]`d by default because
+they need a real Redis Stack):
+
+```bash
+./hack/redis-stack.sh &   # start Redis Stack
+REDIS_URL=redis://127.0.0.1:6379 cargo test --test redis_semantic -- --ignored
+```
+
+`REDIS_URL` above only configures that test run; the running service reads
+`LLM_D_SC_REDIS_URL` instead.
+
 **4. Call it over gRPC.** The bundled gateway stand-in issues a real call over a
 persistent channel, consumes the signals, and applies its own test-only policy
 afterwards, demonstrating that routing authority stays outside this service:
@@ -210,6 +239,11 @@ a separate OCI artifact.
                  ▼
    tokenize → transformer → pooling → normalize → rank
 ```
+
+An optional semantic (L2) cache tier can sit behind the exact-result cache: on a
+miss, once the prompt is embedded, a similar-enough prior prompt returns its
+stored label instead of reaching the classifier runtime. It is off by default;
+see "Optional: semantic result cache" under [Quick start](#quick-start) above.
 
 Three properties are load-bearing:
 
