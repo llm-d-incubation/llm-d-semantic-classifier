@@ -128,6 +128,27 @@ where
         }
     }
 
+    /// Like [`ClassifyServiceImpl::with_executor`] but wraps the backend in a
+    /// [`crate::classify::ServiceCore`] carrying an explicit L2 semantic cache
+    /// tier (production opt-in). The synthetic/test paths keep using
+    /// `with_executor` (Noop L2).
+    pub fn with_executor_and_cache(
+        service: R,
+        telemetry: Telemetry,
+        metrics: Metrics,
+        bound: usize,
+        semantic: Arc<dyn crate::cache::SemanticCache>,
+    ) -> Self {
+        let core =
+            crate::classify::ServiceCore::with_semantic_cache(service, metrics.clone(), semantic);
+        let executor = InferenceExecutor::spawn(core, metrics.clone(), bound);
+        Self {
+            telemetry,
+            metrics,
+            executor: Arc::new(executor),
+        }
+    }
+
     /// The configured bound on total admitted (in-flight + queued) work.
     pub fn queue_bound(&self) -> usize {
         self.executor.bound()
@@ -316,11 +337,47 @@ impl ClassifyServer {
         // real Candle forward are visible to a benchmark harness (AC-012).
         let metrics = classifier.metrics();
         let telemetry = Telemetry::new();
-        let service = ClassifyServiceImpl::with_executor(
+        // Select the L2 cache strategy from the environment (off by default:
+        // `LLM_D_SC_CACHE` unset resolves to "exact", i.e. Noop). Any
+        // misconfiguration or a Redis that cannot be reached falls back to
+        // the exact-only cache rather than failing to start (fail-open).
+        let cache_cfg = crate::config::CacheConfig::from_env().unwrap_or_else(|e| {
+            eprintln!("llm-d-sc: invalid cache config ({e:?}); falling back to exact cache");
+            crate::config::CacheConfig {
+                strategy: "exact".into(),
+                redis_url: None,
+                threshold: 0.90,
+                ttl_secs: 86_400,
+                timeout_ms: 50,
+            }
+        });
+        let semantic: Arc<dyn crate::cache::SemanticCache> = if cache_cfg.strategy
+            == "redis-semantic"
+        {
+            match crate::cache::redis::RedisSemanticCache::connect(&cache_cfg, metrics.clone()) {
+                Ok(rc) => {
+                    eprintln!(
+                        "llm-d-sc: semantic cache enabled (redis-semantic, threshold {})",
+                        cache_cfg.threshold
+                    );
+                    Arc::new(rc)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "llm-d-sc: redis-semantic unavailable ({e}); falling back to exact cache"
+                    );
+                    Arc::new(crate::cache::NoopSemanticCache)
+                }
+            }
+        } else {
+            Arc::new(crate::cache::NoopSemanticCache)
+        };
+        let service = ClassifyServiceImpl::with_executor_and_cache(
             classifier,
             telemetry.clone(),
             metrics.clone(),
             DEFAULT_QUEUE_BOUND,
+            semantic,
         );
         Self::serve(
             addr,
