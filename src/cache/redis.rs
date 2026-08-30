@@ -3,6 +3,7 @@
 //! or a dropped write (insert). Guarded by a circuit breaker so a dead Redis
 //! costs one probe per cooldown, not one timeout per request.
 
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::time::Duration;
 
 use r2d2::Pool;
@@ -17,13 +18,27 @@ use crate::classify::{ClassificationResult, Embedding};
 use crate::config::CacheConfig;
 use crate::metrics::Metrics;
 
+/// A deferred L2 write, enqueued by `insert` and drained by the background
+/// write-back worker so the caller never blocks on Redis.
+enum WriteJob {
+    Put {
+        blob: Vec<u8>,
+        dim: usize,
+        payload: String,
+        identity: String,
+    },
+}
+
 pub struct RedisSemanticCache {
     pool: Pool<Client>,
     threshold: f32,
-    ttl_secs: u64,
     timeout_ms: u64,
     breaker: CircuitBreaker,
     metrics: Metrics,
+    /// Enqueues writes for the background `sc-l2-writeback` worker. Bounded
+    /// so a Redis outage cannot grow unbounded memory; a full queue drops
+    /// the write (best-effort, same fail-open contract as a Redis error).
+    writer: SyncSender<WriteJob>,
 }
 
 impl RedisSemanticCache {
@@ -44,13 +59,106 @@ impl RedisSemanticCache {
             .connection_timeout(Duration::from_millis(cfg.timeout_ms))
             .build(client)
             .map_err(|e| e.to_string())?;
+
+        // Bounded so a sustained Redis outage cannot grow the queue without
+        // limit; `insert` drops the write (best-effort) once it is full.
+        let (tx, rx) = sync_channel::<WriteJob>(1024);
+        {
+            let pool = pool.clone();
+            let metrics = metrics.clone();
+            let ttl = cfg.ttl_secs;
+            let timeout_ms = cfg.timeout_ms;
+            std::thread::Builder::new()
+                .name("sc-l2-writeback".into())
+                .spawn(move || {
+                    // Its own breaker: a wedged Redis must not have the
+                    // writer hammering it once per queued job, independent
+                    // of the reader-side breaker's state.
+                    let breaker = CircuitBreaker::new(5, Duration::from_secs(10));
+                    for job in rx {
+                        if !breaker.allow() {
+                            // An open breaker means this write is dropped
+                            // exactly like a real failure: count it as
+                            // degraded, not a silent no-op.
+                            metrics.record_l2_degraded();
+                            continue;
+                        }
+                        let WriteJob::Put {
+                            blob,
+                            dim,
+                            payload,
+                            identity,
+                        } = job;
+                        let key = format!("sc:{identity}:{}", blake3::hash(&blob).to_hex());
+                        let write = (|| -> Result<(), String> {
+                            let mut conn = pool.get().map_err(|e| e.to_string())?;
+                            let timeout = Duration::from_millis(timeout_ms);
+                            conn.set_read_timeout(Some(timeout)).ok();
+                            conn.set_write_timeout(Some(timeout)).ok();
+                            // Create the index lazily now that the vector
+                            // dimension is known. Ignore the result: an
+                            // "already exists" error (or any other trouble)
+                            // here only means lookups may miss, never that
+                            // this write-back fails.
+                            let _ = redis::cmd("FT.CREATE")
+                                .arg(index_name())
+                                .arg("ON")
+                                .arg("HASH")
+                                .arg("PREFIX")
+                                .arg(1)
+                                .arg("sc:")
+                                .arg("SCHEMA")
+                                .arg("identity")
+                                .arg("TAG")
+                                .arg("payload")
+                                .arg("TEXT")
+                                .arg("vec")
+                                .arg("VECTOR")
+                                .arg("FLAT")
+                                .arg(6)
+                                .arg("TYPE")
+                                .arg("FLOAT32")
+                                .arg("DIM")
+                                .arg(dim)
+                                .arg("DISTANCE_METRIC")
+                                .arg("COSINE")
+                                .query::<redis::Value>(&mut conn);
+                            redis::cmd("HSET")
+                                .arg(&key)
+                                .arg("identity")
+                                .arg(&identity)
+                                .arg("payload")
+                                .arg(&payload)
+                                .arg("vec")
+                                .arg(blob.as_slice())
+                                .query::<redis::Value>(&mut conn)
+                                .map_err(|e| e.to_string())?;
+                            redis::cmd("EXPIRE")
+                                .arg(&key)
+                                .arg(ttl)
+                                .query::<redis::Value>(&mut conn)
+                                .map_err(|e| e.to_string())?;
+                            Ok(())
+                        })();
+                        match write {
+                            Ok(_) => breaker.record_success(),
+                            Err(_) => {
+                                breaker.record_failure();
+                                metrics.record_l2_degraded();
+                            }
+                        }
+                    }
+                })
+                .map_err(|e| e.to_string())?;
+        }
+
         let cache = RedisSemanticCache {
             pool,
             threshold: cfg.threshold,
-            ttl_secs: cfg.ttl_secs,
             timeout_ms: cfg.timeout_ms,
             breaker: CircuitBreaker::new(5, Duration::from_secs(10)),
             metrics,
+            writer: tx,
         };
         // Best-effort index creation; a missing index only means lookups miss.
         // The dimension is not known until the first insert (RediSearch
@@ -162,62 +270,25 @@ impl SemanticCache for RedisSemanticCache {
             self.metrics.record_l2_degraded();
             return;
         }
-        let blob = vector_to_bytes(&embedding.vector);
-        let dim = embedding.dim();
-        let payload = encode_result(result);
-        let key = format!("sc:{identity}:{}", blake3::hash(&blob).to_hex());
-        let ttl = self.ttl_secs;
-        // `with_timeout_conn` runs `f` synchronously in this same call (no
-        // spawned thread), so the closure can borrow `identity` directly —
-        // no need to own a cloned String.
-        let outcome = self.with_timeout_conn(move |conn| {
-            // Create the index lazily now that the vector dimension is known.
-            // Ignore the result: an "already exists" error (or any other
-            // trouble) here only means lookups may miss, never that the
-            // caller's request fails.
-            let _ = redis::cmd("FT.CREATE")
-                .arg(index_name())
-                .arg("ON")
-                .arg("HASH")
-                .arg("PREFIX")
-                .arg(1)
-                .arg("sc:")
-                .arg("SCHEMA")
-                .arg("identity")
-                .arg("TAG")
-                .arg("payload")
-                .arg("TEXT")
-                .arg("vec")
-                .arg("VECTOR")
-                .arg("FLAT")
-                .arg(6)
-                .arg("TYPE")
-                .arg("FLOAT32")
-                .arg("DIM")
-                .arg(dim)
-                .arg("DISTANCE_METRIC")
-                .arg("COSINE")
-                .query::<redis::Value>(conn);
-            redis::cmd("HSET")
-                .arg(&key)
-                .arg("identity")
-                .arg(identity)
-                .arg("payload")
-                .arg(&payload)
-                .arg("vec")
-                .arg(blob.as_slice())
-                .query::<redis::Value>(conn)?;
-            redis::cmd("EXPIRE")
-                .arg(&key)
-                .arg(ttl)
-                .query::<redis::Value>(conn)
-        });
-        match outcome {
-            Ok(_) => self.breaker.record_success(),
-            Err(_) => {
-                self.breaker.record_failure();
-                self.metrics.record_l2_degraded();
-            }
+        // `encode_result` uses `serde_json`'s panicking encoder, and JSON
+        // cannot represent NaN/Infinity: a non-finite score would panic this
+        // (the caller's/inference) thread. Drop the write-back instead —
+        // the same fail-open contract as any other write failure.
+        if result.ranked.iter().any(|r| !r.score.is_finite()) {
+            self.metrics.record_l2_degraded();
+            return;
+        }
+        let job = WriteJob::Put {
+            blob: vector_to_bytes(&embedding.vector),
+            dim: embedding.dim(),
+            payload: encode_result(result),
+            identity: identity.to_string(),
+        };
+        // Best-effort: enqueue and return immediately. A full queue drops
+        // the write rather than blocking the caller on Redis; that dropped
+        // write-back is observably degraded, same as any other L2 failure.
+        if self.writer.try_send(job).is_err() {
+            self.metrics.record_l2_degraded();
         }
     }
 }

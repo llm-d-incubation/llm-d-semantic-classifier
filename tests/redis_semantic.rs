@@ -50,6 +50,26 @@ fn lookup_is_fail_open_when_redis_is_unreachable() {
 }
 
 #[test]
+fn insert_returns_immediately_even_when_redis_is_down() {
+    // Port 1 is never a Redis; the write-back is async (a background worker
+    // thread owns the actual Redis call), so a burst of inserts against a
+    // dead Redis must return promptly rather than each paying a connection
+    // timeout on the caller's thread.
+    let cache = RedisSemanticCache::connect(&cfg("redis://127.0.0.1:1"), Metrics::new());
+    if let Ok(cache) = cache {
+        let e = Embedding::new(vec![0.1, 0.2, 0.3]);
+        let start = std::time::Instant::now();
+        for _ in 0..100 {
+            cache.insert(&e, &result("SIMPLE"), "complexity|m|t|x");
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(200),
+            "100 inserts must not block on Redis; write-back is async"
+        );
+    }
+}
+
+#[test]
 fn breaker_open_short_circuits_without_calling_redis() {
     // Every lookup that reaches (and fails against) Redis records a degraded
     // outcome, and — this is the fix under test — so does every lookup that
