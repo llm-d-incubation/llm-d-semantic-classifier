@@ -44,6 +44,8 @@ blake3 = "1.8.6"
 # recent macOS/Xcode. A regex backend is mandatory, so fancy-regex (pure Rust)
 # replaces onig (C). The result needs no C or C++ toolchain at all.
 tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-regex"] }
+redis = { version = "0.32.2", features = ["r2d2"] }
+r2d2 = "0.8.10"
 
 [build-dependencies]
 tonic-prost-build = "0.14"

@@ -20,6 +20,7 @@
 //! `String`.
 
 pub mod breaker;
+pub mod redis;
 pub mod redis_codec;
 
 use std::collections::HashMap;
