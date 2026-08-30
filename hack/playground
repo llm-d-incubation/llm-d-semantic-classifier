@@ -14,8 +14,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CLASSIFIER="${LLM_D_SC_CLASSIFIER:-complexity}"
-MODEL_DIR="${LLM_D_SC_MODEL_DIR:-artifacts/models/${CLASSIFIER}}"
+# Classifiers offered in the UI dropdown. Default: all three built-ins.
+# Set LLM_D_SC_CLASSIFIER=<name> to demo a single classifier instead.
+CLASSIFIERS="${LLM_D_SC_CLASSIFIER:-complexity cost sensitivity}"
+MODELS_DIR="${LLM_D_SC_MODELS_DIR:-artifacts/models}"
 UI_ADDR="${LLM_D_SC_PLAYGROUND_ADDR:-127.0.0.1:8080}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 REDIS_URL="${LLM_D_SC_REDIS_URL:-redis://127.0.0.1:${REDIS_PORT}}"
@@ -81,27 +83,33 @@ else
   CACHE_STRATEGY="exact"
 fi
 
-# --- Model artifact ---------------------------------------------------------
-if [ ! -s "${MODEL_DIR}/model.safetensors" ]; then
-  log "model not found in ${MODEL_DIR}; fetching '${CLASSIFIER}' (~90MB, one-time)…"
-  command -v python3 >/dev/null 2>&1 || die "python3 not found; needed to download the model."
+# --- Model artifacts --------------------------------------------------------
+# Ensure the Python downloader is available once, then fetch each missing model.
+ensure_hf() {
+  command -v python3 >/dev/null 2>&1 || die "python3 not found; needed to download models."
   if ! python3 -c 'import huggingface_hub' >/dev/null 2>&1; then
     log "installing huggingface_hub (pip)…"
     python3 -m pip install --quiet --user huggingface_hub \
       || die "failed to install huggingface_hub; install it and re-run."
   fi
-  ./hack/fetch-model --classifier "$CLASSIFIER"
-else
-  log "model present in ${MODEL_DIR}."
-fi
+}
+for c in $CLASSIFIERS; do
+  if [ ! -s "${MODELS_DIR}/${c}/model.safetensors" ]; then
+    log "model '${c}' not found; fetching (~90MB, one-time)…"
+    ensure_hf
+    ./hack/fetch-model --classifier "$c"
+  else
+    log "model '${c}' present."
+  fi
+done
 
 # --- Build ------------------------------------------------------------------
 log "building the playground binary (release, --features playground)…"
 cargo build --release --features playground --bin llm-d-sc-playground
 
 # --- Run --------------------------------------------------------------------
-export LLM_D_SC_MODEL_DIR="$MODEL_DIR"
-export LLM_D_SC_CLASSIFIER="$CLASSIFIER"
+export LLM_D_SC_MODELS_DIR="$MODELS_DIR"
+export LLM_D_SC_PLAYGROUND_CLASSIFIERS="$(echo "$CLASSIFIERS" | tr ' ' ',')"
 export LLM_D_SC_CACHE="$CACHE_STRATEGY"
 export LLM_D_SC_REDIS_URL="$REDIS_URL"
 export LLM_D_SC_PLAYGROUND_ADDR="$UI_ADDR"

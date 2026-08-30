@@ -2,10 +2,15 @@
 //!
 //! This binary is NOT part of the served product — it exists to demo and poke at
 //! the L1 exact / L2 semantic cache tiers from a browser. It hosts the REAL
-//! production path in-process: it loads and warms the resident Candle classifier,
-//! binds the same [`ClassifyServer`] the service binary uses (so the environment
-//! selects the `redis-semantic` L2 tier exactly as in production), and drives it
-//! through the blocking [`ClassifyClient`].
+//! production path in-process: it loads and warms one resident Candle classifier
+//! per available taxonomy, binds the same [`ClassifyServer`] the service binary
+//! uses for each (so the environment selects the `redis-semantic` L2 tier exactly
+//! as in production), and drives them through the blocking [`ClassifyClient`].
+//!
+//! Multiple classifiers, one Redis: the two-tier cache namespaces every entry by
+//! an identity tag that begins with the classifier id, so complexity, cost and
+//! sensitivity share one Redis instance without ever reading each other's cached
+//! labels. The UI picks which classifier a prompt is sent to.
 //!
 //! Why in-process: the gRPC response carries only ranked labels + revisions, and
 //! there is no metrics HTTP endpoint. The ONLY way to tell whether a request was
@@ -17,52 +22,85 @@
 //!
 //! Served surface (plain HTTP over `tiny_http`, same-origin, no framework):
 //!   GET  /              -> the single-page UI (embedded at build time)
-//!   GET  /api/info      -> classifier id + cache strategy + running totals
-//!   POST /api/classify  -> { "text": "..." } -> ranked labels + cache tier + latency
+//!   GET  /api/info      -> available classifiers (id + taxonomy + totals) + cache
+//!   POST /api/classify  -> { "text": "...", "classifier": "..." }
+//!                          -> ranked labels + cache tier + latency
 
 use std::time::Instant;
 
-use llm_d_sc::classify::{load_and_warm_modelcar, ClassifierRuntime};
+use llm_d_sc::classify::{CandleClassifier, ClassifierRuntime};
 use llm_d_sc::config::CacheConfig;
 use llm_d_sc::grpc::classify::{ClassifyClient, ClassifyRequest, ClassifyServer};
 use llm_d_sc::metrics::MetricsSnapshot;
+use llm_d_sc::taxonomy::ClassifierDefinition;
 
 /// The single-page UI, embedded so the binary is self-contained.
 const INDEX_HTML: &str = include_str!("playground.html");
 
-/// Default per-classifier model directory (matches the CLI convention).
-const DEFAULT_MODEL_DIR: &str = "artifacts/models/complexity";
+/// Base directory holding one ModelCar subdirectory per classifier.
+const DEFAULT_MODELS_DIR: &str = "artifacts/models";
+/// Classifiers offered when the environment does not name a set.
+const DEFAULT_CLASSIFIERS: &str = "complexity,cost,sensitivity";
 /// Default address the browser UI is served on.
 const DEFAULT_UI_ADDR: &str = "127.0.0.1:8080";
 
+/// One resident classifier hosted in-process: its own server, client, the
+/// taxonomy it ranks, and the post-warmup baseline its totals are reported
+/// against.
+struct Classifier {
+    /// Selector key exposed to the UI (the model subdirectory name).
+    name: String,
+    /// Identity the runtime reports (may differ from `name`).
+    classifier_id: String,
+    /// The full ranked taxonomy, captured from the warmup response.
+    labels: Vec<String>,
+    server: ClassifyServer,
+    client: ClassifyClient,
+    baseline: MetricsSnapshot,
+}
+
 fn main() -> std::io::Result<()> {
-    let model_dir =
-        std::env::var("LLM_D_SC_MODEL_DIR").unwrap_or_else(|_| DEFAULT_MODEL_DIR.to_string());
+    let models_dir =
+        std::env::var("LLM_D_SC_MODELS_DIR").unwrap_or_else(|_| DEFAULT_MODELS_DIR.to_string());
+    let names = std::env::var("LLM_D_SC_PLAYGROUND_CLASSIFIERS")
+        .unwrap_or_else(|_| DEFAULT_CLASSIFIERS.to_string());
     let ui_addr =
         std::env::var("LLM_D_SC_PLAYGROUND_ADDR").unwrap_or_else(|_| DEFAULT_UI_ADDR.to_string());
 
-    // Load + warm the resident Candle classifier. ANY failure here (missing
-    // ModelCar dir, bad layout, warmup forward failed) aborts with an
-    // actionable error — a directory that merely exists must not serve.
-    eprintln!("llm-d-sc playground: loading model from {model_dir} …");
-    let classifier = load_and_warm_modelcar(&model_dir).map_err(|e| {
-        std::io::Error::new(
+    // Load + warm every named classifier whose weights are present. A missing
+    // model dir is skipped with a warning rather than fatal, so the demo still
+    // runs with whatever subset is downloaded.
+    let mut classifiers: Vec<Classifier> = Vec::new();
+    for name in names.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let model_dir = format!("{models_dir}/{name}");
+        if !std::path::Path::new(&format!("{model_dir}/model.safetensors")).exists() {
+            eprintln!("llm-d-sc playground: skipping '{name}' — no model at {model_dir}");
+            continue;
+        }
+        match load_classifier(name, &model_dir) {
+            Ok(c) => {
+                eprintln!(
+                    "llm-d-sc playground: loaded '{}' (id '{}', {} labels)",
+                    c.name,
+                    c.classifier_id,
+                    c.labels.len()
+                );
+                classifiers.push(c);
+            }
+            Err(e) => eprintln!("llm-d-sc playground: could not load '{name}': {e}"),
+        }
+    }
+
+    if classifiers.is_empty() {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            format!("could not load/warm model at {model_dir}: {e}\n\nRun ./hack/fetch-model --classifier complexity (or point LLM_D_SC_MODEL_DIR at a ModelCar dir)."),
-        )
-    })?;
-    let meta = classifier.metadata();
-    let classifier_id = meta.classifier_id.clone();
+            format!(
+                "no classifier models found under {models_dir} (tried: {names}).\n\nRun ./hack/fetch-model --classifier complexity (and cost, sensitivity), or use ./hack/playground."
+            ),
+        ));
+    }
 
-    // Bind the production server in-process. `bind_with_classifier` reads the
-    // cache strategy from the environment (LLM_D_SC_CACHE=redis-semantic +
-    // LLM_D_SC_REDIS_URL), and fails open to the exact cache if Redis is
-    // unreachable or the feature is off — the UI keeps working either way.
-    let server = ClassifyServer::bind_with_classifier("127.0.0.1:0", classifier)?;
-    let grpc_addr = server.local_addr();
-    let mut client = ClassifyClient::connect(&grpc_addr)?;
-
-    // Snapshot of the cache config purely for display in the UI header.
+    // Cache config snapshot, purely for display in the UI header.
     let cache_cfg = CacheConfig::from_env().unwrap_or_else(|_| CacheConfig {
         strategy: "exact".into(),
         redis_url: None,
@@ -71,26 +109,13 @@ fn main() -> std::io::Result<()> {
         timeout_ms: 50,
     });
 
-    // Prime the semantic tier: RediSearch creates its vector index lazily on the
-    // first insert, so the very first lookup hits a not-yet-existent index and
-    // reads as DEGRADED (fail-open). A throwaway warmup classify creates the
-    // index before any user request, and the post-warmup snapshot below becomes
-    // the baseline the UI totals are reported against — so warmup activity stays
-    // invisible and user-facing totals start at zero.
-    let _ = client.classify(ClassifyRequest {
-        request_id: "pg-warmup".to_string(),
-        session_id: "playground".to_string(),
-        context: "llm-d-sc playground warmup probe".to_string(),
-        signals: Vec::new(),
-    });
-    let baseline = server.metrics_snapshot();
-
     let http = tiny_http::Server::http(&ui_addr).map_err(|e| {
         std::io::Error::other(format!("could not bind playground UI on {ui_addr}: {e}"))
     })?;
 
     eprintln!(
-        "llm-d-sc playground: classifier '{classifier_id}', cache strategy '{}', gRPC {grpc_addr}",
+        "llm-d-sc playground: {} classifier(s), cache strategy '{}'",
+        classifiers.len(),
         cache_cfg.strategy
     );
     eprintln!();
@@ -109,20 +134,13 @@ fn main() -> std::io::Result<()> {
             (tiny_http::Method::Get, "/") => {
                 (200, "text/html; charset=utf-8", INDEX_HTML.to_string())
             }
-            (tiny_http::Method::Get, "/api/info") => (
-                200,
-                "application/json",
-                info_json(
-                    &classifier_id,
-                    &cache_cfg,
-                    &server.metrics_snapshot(),
-                    &baseline,
-                ),
-            ),
+            (tiny_http::Method::Get, "/api/info") => {
+                (200, "application/json", info_json(&classifiers, &cache_cfg))
+            }
             (tiny_http::Method::Post, "/api/classify") => {
                 let mut raw = String::new();
                 let _ = request.as_reader().read_to_string(&mut raw);
-                match handle_classify(&mut client, &server, &raw, &mut request_seq, &baseline) {
+                match handle_classify(&mut classifiers, &raw, &mut request_seq) {
                     Ok(json) => (200, "application/json", json),
                     Err(msg) => (200, "application/json", error_json(&msg)),
                 }
@@ -141,20 +159,81 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-/// Run one classify call and describe the outcome, including which cache tier
-/// served it (derived from the metrics counter delta around the call).
+/// Load one classifier, bind it in-process, capture its taxonomy, and snapshot
+/// the post-warmup baseline.
+///
+/// The model weights and the taxonomy are independent: every shipped model is an
+/// embedder ranked against anchor definitions, and the taxonomy (its labels and
+/// `classifier_id`) is selected by name — NOT by the model directory. So each
+/// model dir is paired with its matching built-in definition via
+/// [`ClassifierDefinition::resolve`]; without this every classifier would default
+/// to the same taxonomy and share one cache identity.
+///
+/// The warmup classify does double duty: it primes the RediSearch index (created
+/// lazily on first insert, so the very first lookup would otherwise read as
+/// DEGRADED) and its ranked response reveals the full taxonomy. The baseline
+/// taken afterwards is what UI totals are reported against, so warmup activity
+/// stays invisible and user-facing totals start at zero.
+fn load_classifier(name: &str, model_dir: &str) -> std::io::Result<Classifier> {
+    eprintln!("llm-d-sc playground: loading model from {model_dir} (taxonomy '{name}') …");
+    let definition = ClassifierDefinition::resolve(name).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("no taxonomy definition for '{name}': {e}"),
+        )
+    })?;
+    let classifier =
+        CandleClassifier::from_modelcar_with(std::path::Path::new(model_dir), definition).map_err(
+            |e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("could not load model at {model_dir}: {e}"),
+                )
+            },
+        )?;
+    let classifier_id = classifier.metadata().classifier_id.clone();
+
+    let server = ClassifyServer::bind_with_classifier("127.0.0.1:0", classifier)?;
+    let grpc_addr = server.local_addr();
+    let mut client = ClassifyClient::connect(&grpc_addr)?;
+
+    let warm = client.classify(ClassifyRequest {
+        request_id: format!("pg-warmup-{name}"),
+        session_id: "playground".to_string(),
+        context: "llm-d-sc playground warmup probe".to_string(),
+        signals: Vec::new(),
+    });
+    let labels = warm
+        .map(|r| r.ranked.into_iter().map(|s| s.label).collect())
+        .unwrap_or_default();
+    let baseline = server.metrics_snapshot();
+
+    Ok(Classifier {
+        name: name.to_string(),
+        classifier_id,
+        labels,
+        server,
+        client,
+        baseline,
+    })
+}
+
+/// Run one classify call against the requested classifier and describe the
+/// outcome, including which cache tier served it (derived from that server's
+/// metrics counter delta around the call).
 fn handle_classify(
-    client: &mut ClassifyClient,
-    server: &ClassifyServer,
+    classifiers: &mut [Classifier],
     raw_body: &str,
     seq: &mut u64,
-    baseline: &MetricsSnapshot,
 ) -> Result<String, String> {
-    let text =
-        parse_text(raw_body).ok_or_else(|| "request body must be {\"text\": \"…\"}".to_string())?;
+    let (text, which) = parse_request(raw_body)?;
     if text.trim().is_empty() {
         return Err("prompt text is empty".to_string());
     }
+    let entry = classifiers
+        .iter_mut()
+        .find(|c| c.name == which)
+        .ok_or_else(|| format!("unknown classifier '{which}'"))?;
 
     *seq += 1;
     let request = ClassifyRequest {
@@ -165,16 +244,24 @@ fn handle_classify(
         signals: Vec::new(),
     };
 
-    let before = server.metrics_snapshot();
+    let before = entry.server.metrics_snapshot();
     let started = Instant::now();
-    let response = client
+    let response = entry
+        .client
         .classify(request)
         .map_err(|s| format!("classify failed: {} ({})", s.message(), s.code()))?;
     let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let after = server.metrics_snapshot();
+    let after = entry.server.metrics_snapshot();
 
     let tier = classify_tier(&before, &after);
-    Ok(response_json(&response, tier, latency_ms, &after, baseline))
+    Ok(response_json(
+        &entry.name,
+        &response,
+        tier,
+        latency_ms,
+        &after,
+        &entry.baseline,
+    ))
 }
 
 /// Partition a served request into a cache tier from the counter delta.
@@ -197,10 +284,22 @@ fn classify_tier(before: &MetricsSnapshot, after: &MetricsSnapshot) -> &'static 
     }
 }
 
-/// Extract the `text` field from a `{"text": "..."}` JSON body.
-fn parse_text(raw: &str) -> Option<String> {
-    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
-    v.get("text")?.as_str().map(|s| s.to_string())
+/// Extract `text` (required) and `classifier` (defaults to the first built-in)
+/// from a `{"text": "...", "classifier": "..."}` JSON body.
+fn parse_request(raw: &str) -> Result<(String, String), String> {
+    let v: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| "request body must be JSON".to_string())?;
+    let text = v
+        .get("text")
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| "request body must be {\"text\": \"…\"}".to_string())?
+        .to_string();
+    let which = v
+        .get("classifier")
+        .and_then(|c| c.as_str())
+        .unwrap_or("complexity")
+        .to_string();
+    Ok((text, which))
 }
 
 /// Human-readable name for a proto `ClassificationStatus` discriminant.
@@ -226,6 +325,7 @@ fn totals_json(snap: &MetricsSnapshot, baseline: &MetricsSnapshot) -> serde_json
 }
 
 fn response_json(
+    classifier: &str,
     response: &llm_d_sc::grpc::classify::ClassifyResponse,
     tier: &str,
     latency_ms: f64,
@@ -238,6 +338,7 @@ fn response_json(
         .map(|r| serde_json::json!({ "label": r.label, "score": r.score }))
         .collect();
     serde_json::json!({
+        "classifier": classifier,
         "tier": tier,
         "latency_ms": format!("{latency_ms:.1}"),
         "status": status_name(response.status),
@@ -251,18 +352,23 @@ fn response_json(
     .to_string()
 }
 
-fn info_json(
-    classifier_id: &str,
-    cfg: &CacheConfig,
-    totals: &MetricsSnapshot,
-    baseline: &MetricsSnapshot,
-) -> String {
+fn info_json(classifiers: &[Classifier], cfg: &CacheConfig) -> String {
+    let list: Vec<serde_json::Value> = classifiers
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "name": c.name,
+                "classifier_id": c.classifier_id,
+                "labels": c.labels,
+                "totals": totals_json(&c.server.metrics_snapshot(), &c.baseline),
+            })
+        })
+        .collect();
     serde_json::json!({
-        "classifier_id": classifier_id,
         "cache_strategy": cfg.strategy,
         "redis_url": cfg.redis_url,
         "threshold": cfg.threshold,
-        "totals": totals_json(totals, baseline),
+        "classifiers": list,
     })
     .to_string()
 }

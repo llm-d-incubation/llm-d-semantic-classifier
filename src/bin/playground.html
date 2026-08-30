@@ -46,6 +46,15 @@
   }
   .card + .card { margin-top: 20px; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .picker { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .picker label { color: var(--muted); font-size: 13px; }
+  select {
+    background: #0a0e16; color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 9px 12px; font: inherit; outline: none; cursor: pointer;
+    min-width: 180px;
+  }
+  select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,254,.15); }
+  .taxonomy { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   textarea {
     width: 100%; min-height: 84px; resize: vertical; padding: 12px 14px;
     background: #0a0e16; color: var(--text); border: 1px solid var(--border);
@@ -89,7 +98,7 @@
   .provenance { color: var(--muted); font-size: 12px; margin: 10px 0 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
 
   .bars { margin-top: 14px; display: grid; gap: 8px; }
-  .bar-row { display: grid; grid-template-columns: 110px 1fr 64px; align-items: center; gap: 10px; }
+  .bar-row { display: grid; grid-template-columns: 130px 1fr 64px; align-items: center; gap: 10px; }
   .bar-row .name { font-weight: 600; font-size: 13px; }
   .bar-row.top .name { color: var(--accent); }
   .track { background: #0a0e16; border: 1px solid var(--border); border-radius: 8px; height: 16px; overflow: hidden; }
@@ -105,6 +114,7 @@
   .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-top: 2px; }
   .stat.l1 .n { color: var(--l1); } .stat.l2 .n { color: var(--l2); }
   .stat.miss .n { color: var(--miss); } .stat.degraded .n { color: var(--degraded); }
+  .stats-note { color: var(--muted); font-size: 11px; margin: 10px 0 0; }
 
   .legend { color: var(--muted); font-size: 12px; margin-top: 14px; display: grid; gap: 6px; }
   .legend .li { display: flex; gap: 8px; align-items: flex-start; }
@@ -115,6 +125,7 @@
     background: #0c131f; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
   .tl-item .q { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tl-item .meta { display: flex; gap: 10px; align-items: center; }
+  .tl-item .clf { color: var(--accent); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
   .tl-item .toplabel { color: var(--muted); font-size: 12px; }
   .tl-item .lat { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .tl-badge { font-size: 11px; padding: 3px 8px; border-radius: 999px; font-weight: 700; }
@@ -131,14 +142,20 @@
     <span class="subtitle">Semantic Cache Playground</span>
   </header>
   <p class="tagline">
-    Classify a prompt, then send a <em>paraphrase</em>. On an exact-cache miss the prompt is embedded and a
-    semantically similar prior prompt reuses its stored label &mdash; an <strong>L2 semantic hit</strong> &mdash;
-    instead of re-ranking. Re-send the identical text for an <strong>L1 exact hit</strong>.
+    Pick a classifier, classify a prompt, then send a <em>paraphrase</em>. On an exact-cache miss the prompt is
+    embedded and a semantically similar prior prompt reuses its stored label &mdash; an <strong>L2 semantic hit</strong>
+    &mdash; instead of re-ranking. Re-send the identical text for an <strong>L1 exact hit</strong>. Each classifier
+    keeps its own isolated cache.
   </p>
 
   <div class="grid">
     <div class="col-main">
       <div class="card">
+        <div class="picker">
+          <label for="classifier">Classifier</label>
+          <select id="classifier"></select>
+          <span class="taxonomy" id="taxonomy"></span>
+        </div>
         <h2>Prompt</h2>
         <textarea id="prompt" placeholder="e.g. What is the capital of France?"></textarea>
         <div class="row">
@@ -176,6 +193,7 @@
           <div class="stat miss"><div class="n" id="s-miss">0</div><div class="k">Compute misses</div></div>
           <div class="stat degraded"><div class="n" id="s-degraded">0</div><div class="k">Degraded</div></div>
         </div>
+        <p class="stats-note" id="statsNote">Totals for the selected classifier.</p>
         <div class="legend">
           <div class="li"><span class="dot" style="background:var(--miss)"></span><span><strong>Compute miss</strong> &mdash; no cached match; ran the model forward and stored the result.</span></div>
           <div class="li"><span class="dot" style="background:var(--l1)"></span><span><strong>L1 exact hit</strong> &mdash; identical text served from the exact cache; no tokenizer, no forward.</span></div>
@@ -192,11 +210,32 @@
 </div>
 
 <script>
-const EXAMPLES = [
+// Per-classifier example sets. Each set: three close paraphrases (a miss then
+// two L2 semantic hits) plus a distinct fourth prompt (a fresh compute miss).
+const EXAMPLES = {
+  complexity: [
+    "What is the capital of France?",
+    "Which city is the capital of France?",
+    "What's France's capital city?",
+    "Prove by induction that the sum of the first n odd numbers is n squared.",
+  ],
+  cost: [
+    "Write a short poem about the sea.",
+    "Write a brief poem about the sea.",
+    "Compose a short poem about the sea.",
+    "Translate this entire 400-page novel into French, preserving tone and style.",
+  ],
+  sensitivity: [
+    "What is the weather forecast for tomorrow?",
+    "What's tomorrow's weather forecast?",
+    "Tell me the weather forecast for tomorrow.",
+    "Store my social security number 123-45-6789 for later use.",
+  ],
+};
+const FALLBACK_EXAMPLES = [
   "What is the capital of France?",
   "Which city is the capital of France?",
   "What's France's capital city?",
-  "Prove by induction that the sum of the first n odd numbers is n squared.",
 ];
 const TIER = {
   COMPUTE_MISS: { cls: "b-miss", text: "COMPUTE MISS", short: "miss" },
@@ -206,9 +245,16 @@ const TIER = {
 };
 const $ = (id) => document.getElementById(id);
 
+let CLASSIFIERS = [];   // [{name, classifier_id, labels, totals}]
+let current = null;     // selected classifier name
+
+function currentEntry() { return CLASSIFIERS.find((c) => c.name === current); }
+
 function renderChips() {
   const box = $("chips");
-  EXAMPLES.forEach((ex, i) => {
+  box.innerHTML = "";
+  const set = EXAMPLES[current] || FALLBACK_EXAMPLES;
+  set.forEach((ex, i) => {
     const b = document.createElement("button");
     b.className = "ghost";
     b.textContent = (i + 1) + ". " + ex;
@@ -226,7 +272,7 @@ function renderBars(ranked) {
   const box = $("bars");
   box.innerHTML = "";
   if (!ranked || !ranked.length) return;
-  const scores = ranked.map(r => r.score);
+  const scores = ranked.map((r) => r.score);
   const max = Math.max(...scores), min = Math.min(...scores);
   const span = (max - min) || 1;
   ranked.forEach((r, i) => {
@@ -241,7 +287,7 @@ function renderBars(ranked) {
   });
 }
 
-function pushTimeline(text, data) {
+function pushTimeline(text, clf, data) {
   const tl = $("timeline");
   const empty = tl.querySelector(".empty");
   if (empty) empty.remove();
@@ -249,11 +295,10 @@ function pushTimeline(text, data) {
   const top = (data.ranked && data.ranked[0]) ? data.ranked[0].label : "—";
   const item = document.createElement("div");
   item.className = "tl-item";
-  const color = getComputedStyle(document.documentElement)
-    .getPropertyValue("--" + (b.cls.replace("b-", ""))) || "#888";
   item.innerHTML =
     '<div class="q" title="' + text.replace(/"/g, "&quot;") + '">' + text + '</div>' +
     '<div class="meta">' +
+      '<span class="clf">' + clf + '</span>' +
       '<span class="toplabel">' + top + '</span>' +
       '<span class="lat">' + data.latency_ms + ' ms</span>' +
       '<span class="tl-badge ' + b.cls + '">' + b.text + '</span>' +
@@ -262,24 +307,36 @@ function pushTimeline(text, data) {
 }
 
 function renderTotals(t) {
-  if (!t) return;
+  t = t || { cache_hits: 0, l2_hits: 0, l2_misses: 0, l2_degraded: 0 };
   $("s-l1").textContent = t.cache_hits;
   $("s-l2").textContent = t.l2_hits;
   $("s-miss").textContent = t.l2_misses;
   $("s-degraded").textContent = t.l2_degraded;
 }
 
+function onClassifierChange() {
+  current = $("classifier").value;
+  const e = currentEntry();
+  $("taxonomy").textContent = e && e.labels && e.labels.length
+    ? "labels: " + e.labels.join(" · ") : "";
+  $("statsNote").textContent = "Totals for '" + current + "'.";
+  renderChips();
+  renderTotals(e ? e.totals : null);
+}
+
 async function classify() {
   const text = $("prompt").value.trim();
+  const clf = current;
   $("err").textContent = "";
   if (!text) { $("err").textContent = "Enter a prompt first."; return; }
+  if (!clf) { $("err").textContent = "No classifier available."; return; }
   $("go").disabled = true;
   $("statusline").textContent = "classifying…";
   try {
     const res = await fetch("/api/classify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, classifier: clf }),
     });
     if (!res.ok) throw new Error("HTTP " + res.status + ": " + (await res.text()));
     const data = await res.json();
@@ -295,8 +352,12 @@ async function classify() {
       " · model " + short(data.model_revision) + " · taxonomy " + data.taxonomy_revision;
     renderBars(data.ranked);
     $("resultCard").style.display = "";
-    pushTimeline(text, data);
-    renderTotals(data.totals);
+    pushTimeline(text, clf, data);
+
+    // Keep this classifier's cached totals fresh, and show them if it's still selected.
+    const e = CLASSIFIERS.find((c) => c.name === clf);
+    if (e) e.totals = data.totals;
+    if (clf === current) renderTotals(data.totals);
     $("statusline").textContent = "";
   } catch (e) {
     $("err").textContent = String(e.message || e);
@@ -312,21 +373,32 @@ async function loadBackend() {
   try {
     const r = await fetch("/api/info");
     const d = await r.json();
+    CLASSIFIERS = d.classifiers || [];
+    const sel = $("classifier");
+    sel.innerHTML = "";
+    CLASSIFIERS.forEach((c) => {
+      const o = document.createElement("option");
+      o.value = c.name;
+      o.textContent = c.name;
+      sel.appendChild(o);
+    });
+    current = CLASSIFIERS.length ? CLASSIFIERS[0].name : null;
+    if (current) sel.value = current;
     $("backend").textContent =
-      "classifier " + d.classifier_id + " · cache " + d.cache_strategy +
+      CLASSIFIERS.length + " classifier(s) · cache " + d.cache_strategy +
       (d.redis_url ? " (" + d.redis_url + ")" : "") +
       " · threshold " + d.threshold;
-    renderTotals(d.totals);
+    onClassifierChange();
   } catch (e) {
     $("backend").textContent = "unavailable";
   }
 }
 
 $("go").onclick = classify;
+$("classifier").addEventListener("change", onClassifierChange);
 $("prompt").addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") classify();
 });
-renderChips();
 loadBackend();
 </script>
 </body>

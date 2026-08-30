@@ -184,20 +184,24 @@ REDIS_URL=redis://127.0.0.1:6379 \
 `LLM_D_SC_REDIS_URL` instead.
 
 **Interactive playground.** To see the cache behave in a browser, one command
-starts Redis Stack, downloads the model if missing, and serves a local web UI:
+starts Redis Stack (with a clean cache), downloads any missing models, and
+serves a local web UI:
 
 ```bash
 ./hack/playground      # then open http://127.0.0.1:8080
 ```
 
-Classify a prompt, then a paraphrase of it: the paraphrase is served as an **L2
+Pick a classifier (`complexity`, `cost`, or `sensitivity`) from the dropdown,
+classify a prompt, then a paraphrase of it: the paraphrase is served as an **L2
 semantic hit** (a similar prior prompt's label is reused after embedding), and
 re-sending the identical text is an **L1 exact hit** returned in well under a
-millisecond. It needs Docker (for Redis Stack) and a one-time ~90 MB model
-download (Python 3 + `huggingface_hub`, installed by the script if absent);
-without Docker it still runs, fail-open, with the exact cache only. The
-playground is built only with `--features playground`, so it never affects the
-default build.
+millisecond. Each classifier keeps its own isolated cache. The dropdown ships
+per-classifier example prompts to try. It needs Docker (for Redis Stack) and a
+one-time ~90 MB download per model (Python 3 + `huggingface_hub`, installed by
+the script if absent); without Docker it still runs, fail-open, with the exact
+cache only. Set `LLM_D_SC_CLASSIFIER=complexity` to demo a single classifier.
+The playground is built only with `--features playground`, so it never affects
+the default build.
 
 Two operational constraints apply when the semantic tier is enabled. Both are
 fail-open (they degrade to the normal compute path and never produce a wrong
