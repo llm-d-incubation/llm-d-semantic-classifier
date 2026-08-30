@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::cache::{CacheKey, SharedCache};
+use crate::cache::{identity_tag, CacheKey, NoopSemanticCache, SemanticCache, SharedCache};
 use crate::metrics::{LatencyStage, Metrics};
 use crate::ranker::{anchor_rank, cosine_rank, AnchorSet, Prototype};
 use crate::taxonomy::ClassifierDefinition;
@@ -242,6 +242,7 @@ impl RuntimeMetadata {
 pub struct ServiceCore<R> {
     runtime: Arc<R>,
     cache: SharedCache,
+    semantic: Arc<dyn SemanticCache>,
     metrics: Metrics,
 }
 
@@ -256,11 +257,29 @@ where
 
     /// Build a service core whose cache and hit/miss/total/queue metrics record
     /// into the CALLER-SUPPLIED [`Metrics`] handle, so the backend's own
-    /// tokenize/forward stage recording can share the same registry.
+    /// tokenize/forward stage recording can share the same registry. The L2
+    /// semantic cache tier defaults to [`NoopSemanticCache`] (always misses),
+    /// so behaviour is UNCHANGED unless a semantic cache is opted into via
+    /// [`ServiceCore::with_semantic_cache`].
     pub fn with_metrics(runtime: R, metrics: Metrics) -> Self {
         ServiceCore {
             runtime: Arc::new(runtime),
             cache: SharedCache::new(),
+            semantic: Arc::new(NoopSemanticCache),
+            metrics,
+        }
+    }
+
+    /// Build a service core with an explicit L2 semantic cache tier.
+    pub fn with_semantic_cache(
+        runtime: R,
+        metrics: Metrics,
+        semantic: Arc<dyn SemanticCache>,
+    ) -> Self {
+        ServiceCore {
+            runtime: Arc::new(runtime),
+            cache: SharedCache::new(),
+            semantic,
             metrics,
         }
     }
@@ -289,9 +308,7 @@ where
         self.runtime.metadata()
     }
 
-    /// Delegates to the wrapped runtime's `embed`. The core's `classify`
-    /// override does not call this directly (yet) — the L2 semantic-cache
-    /// wiring that interposes here lands in a later task.
+    /// Delegates to the wrapped runtime's `embed`.
     fn embed(&self, input: &ClassificationInput) -> Result<Embedding, ClassifyError> {
         self.runtime.embed(input)
     }
@@ -328,6 +345,9 @@ where
             taxonomy_rev,
             &normalized,
         );
+        // The L2 isolation tag is built from the SAME identity fields as the L1
+        // blake3 key, so a revision bump can never serve a stale semantic label.
+        let tag = identity_tag(meta.cache_identity());
         let metrics = self.metrics.clone();
         // A miss runs the raw backend forward on the designated single-flight
         // caller; a hit bypasses it entirely (AC-006). The flag distinguishes the
@@ -335,8 +355,10 @@ where
         let forward_ran = Arc::new(AtomicBool::new(false));
         let forward = {
             let runtime = self.runtime.clone();
+            let semantic = self.semantic.clone();
             let metrics = metrics.clone();
             let forward_ran = forward_ran.clone();
+            let tag = tag.clone();
             let input = ClassificationInput {
                 text: normalized,
                 requested_signals: input.requested_signals,
@@ -345,7 +367,16 @@ where
             move || {
                 forward_ran.store(true, Ordering::SeqCst);
                 let _ = &metrics;
-                runtime.classify(input)
+                // Embed once. Reused by both the L2 lookup and the ranker.
+                let embedding = runtime.embed(&input)?;
+                // L2 semantic lookup (fail-open: None on any trouble).
+                if let Some(hit) = semantic.lookup(&embedding, &tag) {
+                    return Ok(hit);
+                }
+                // L2 miss: rank, then best-effort write-back.
+                let result = runtime.rank(&embedding, &input)?;
+                semantic.insert(&embedding, &result, &tag);
+                Ok(result)
             }
         };
         let result = self.cache.classify_concurrent(key, forward);
@@ -1034,6 +1065,88 @@ mod tests {
         let e = Embedding::new(vec![0.0, 1.0, 0.0]);
         assert_eq!(e.dim(), 3);
         assert_eq!(e.vector, vec![0.0, 1.0, 0.0]);
+    }
+
+    /// A spy [`crate::cache::SemanticCache`] proves an L1 miss consults the L2
+    /// tier exactly once, and an L2 hit is served verbatim WITHOUT invoking the
+    /// ranker.
+    #[test]
+    fn service_core_serves_semantic_hit_without_ranking() {
+        use crate::cache::SemanticCache;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc as StdArc;
+
+        struct SpyCache {
+            canned: ClassificationResult,
+            lookups: StdArc<AtomicUsize>,
+        }
+        impl SemanticCache for SpyCache {
+            fn lookup(&self, _e: &Embedding, _id: &str) -> Option<ClassificationResult> {
+                self.lookups.fetch_add(1, Ordering::SeqCst);
+                Some(self.canned.clone())
+            }
+            fn insert(&self, _e: &Embedding, _r: &ClassificationResult, _id: &str) {}
+        }
+
+        let canned = ClassificationResult {
+            classifier_id: "spy".into(),
+            model_revision: "m".into(),
+            tokenizer_revision: "t".into(),
+            taxonomy_revision: "x".into(),
+            status: ClassifyStatus::Ok,
+            ranked: vec![RankedSignal {
+                id: "SEMANTIC_HIT".into(),
+                score: 0.99,
+            }],
+        };
+        let lookups = StdArc::new(AtomicUsize::new(0));
+        let spy = StdArc::new(SpyCache {
+            canned: canned.clone(),
+            lookups: lookups.clone(),
+        });
+
+        let core = ServiceCore::with_semantic_cache(
+            ClassifyService::from_synthetic_fixtures(),
+            Metrics::new(),
+            spy,
+        );
+        let input = ClassificationInput {
+            text: "some novel prompt not seen before".to_string(),
+            requested_signals: vec!["sensitivity".to_string()],
+            session_metadata: HashMap::new(),
+        };
+        let out = core.classify(input).expect("classify");
+        assert_eq!(
+            lookups.load(Ordering::SeqCst),
+            1,
+            "L1 miss must consult L2 once"
+        );
+        assert_eq!(
+            out.ranked[0].id, "SEMANTIC_HIT",
+            "L2 hit must be served verbatim"
+        );
+    }
+
+    /// The default [`ServiceCore`] (Noop L2) must remain unaffected: an L1 miss
+    /// with a Noop L2 always misses, so it must run exactly one embed and one
+    /// rank, reproducing the pre-L2 behaviour byte-for-byte.
+    #[test]
+    fn service_core_noop_default_is_unaffected() {
+        let core =
+            ServiceCore::with_metrics(ClassifyService::from_synthetic_fixtures(), Metrics::new());
+        let input = ClassificationInput {
+            text: "this is a golden sensitivity input".to_string(),
+            requested_signals: vec!["sensitivity".to_string()],
+            session_metadata: HashMap::new(),
+        };
+        let via_core = core.classify(input.clone()).expect("core classify");
+        let direct = ClassifyService::from_synthetic_fixtures()
+            .classify(input)
+            .expect("direct classify");
+        assert_eq!(
+            via_core, direct,
+            "default Noop L2 must not change the classification result"
+        );
     }
 
     /// The `embed`/`rank` split must reproduce the provided `classify` default
