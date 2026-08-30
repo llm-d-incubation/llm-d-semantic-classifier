@@ -44,8 +44,16 @@ blake3 = "1.8.6"
 # recent macOS/Xcode. A regex backend is mandatory, so fancy-regex (pure Rust)
 # replaces onig (C). The result needs no C or C++ toolchain at all.
 tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-regex"] }
-redis = { version = "0.32.2", features = ["r2d2"] }
-r2d2 = "0.8.10"
+# The Redis semantic (L2) cache backend is optional and off by default. It is
+# gated behind the `redis-semantic` feature so the default build stays
+# dependency-light and keeps MSRV 1.75; the redis crate (0.32) requires
+# rustc >= 1.80, so enabling the feature raises the effective toolchain floor.
+redis = { version = "0.32.2", features = ["r2d2"], optional = true }
+r2d2 = { version = "0.8.10", optional = true }
+
+[features]
+# Enables the Redis-backed semantic (L2) cache tier. Requires rustc >= 1.80.
+redis-semantic = ["dep:redis", "dep:r2d2"]
 
 [build-dependencies]
 tonic-prost-build = "0.14"

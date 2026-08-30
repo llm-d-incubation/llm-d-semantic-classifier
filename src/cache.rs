@@ -19,8 +19,15 @@
 //! The cache stores the typed [`crate::classify::ClassificationResult`], not a
 //! `String`.
 
+// The Redis semantic (L2) backend and its supporting modules are compiled only
+// when the `redis-semantic` feature is enabled. The `SemanticCache` trait,
+// `NoopSemanticCache`, and `identity_tag` below stay always-compiled — they are
+// the seam `ServiceCore` uses, defaulting to the Noop (off) cache.
+#[cfg(feature = "redis-semantic")]
 pub mod breaker;
+#[cfg(feature = "redis-semantic")]
 pub mod redis;
+#[cfg(feature = "redis-semantic")]
 pub mod redis_codec;
 
 use std::collections::HashMap;

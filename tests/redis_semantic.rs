@@ -1,10 +1,15 @@
 //! Integration tests for [`llm_d_sc::cache::redis::RedisSemanticCache`].
 //!
+//! The whole suite is gated behind the `redis-semantic` feature: without it the
+//! Redis backend is not compiled, so this file resolves to nothing. Run it with
+//! `cargo test --features redis-semantic --test redis_semantic`.
+//!
 //! The fail-open test runs WITHOUT any Redis server (points at a dead
 //! address) and must always pass under plain `cargo test`. The two
 //! live-Redis tests are `#[ignore]`d (repo convention for external
 //! resources) and require a running Redis Stack at `REDIS_URL`
 //! (see hack/redis-stack.sh).
+#![cfg(feature = "redis-semantic")]
 
 use llm_d_sc::cache::redis::RedisSemanticCache;
 use llm_d_sc::cache::SemanticCache;

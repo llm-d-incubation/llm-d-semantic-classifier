@@ -147,11 +147,17 @@ are comparable WITHIN one response, which is what makes the margin between the
 top two labels meaningful, but they are not calibrated across models or
 taxonomies and should not be read as confidence in a statistical sense.
 
-**Optional: semantic result cache.** Off by default. The built-in exact-match
-cache only reuses a label for the identical text. Setting `LLM_D_SC_CACHE=redis-semantic`
-adds an optional L2 tier behind it: on an exact-cache miss, after the prompt is
-embedded, a semantically similar prior prompt reuses its stored label instead of
-re-ranking. It requires a running
+**Optional: semantic result cache.** Off by default, and not even compiled into
+the default build. The built-in exact-match cache only reuses a label for the
+identical text. The Redis-backed semantic tier is gated behind the
+`redis-semantic` cargo feature, so the default build stays dependency-light and
+keeps MSRV 1.75; enabling the feature pulls in the `redis` crate, which requires
+rustc ≥ 1.80. Build it in with `--features redis-semantic`, then set
+`LLM_D_SC_CACHE=redis-semantic` to add an optional L2 tier behind the exact
+cache: on an exact-cache miss, after the prompt is embedded, a semantically
+similar prior prompt reuses its stored label instead of re-ranking. (A binary
+built without the feature logs a warning and falls back to the exact cache if
+`redis-semantic` is requested at runtime.) It requires a running
 [Redis Stack](https://redis.io/docs/latest/operate/oss_and_stack/install/install-stack/)
 (RediSearch) instance and is a best-effort accelerator, not a source of truth: a
 slow or unreachable Redis degrades to the normal compute path (fail-open) and
@@ -170,7 +176,8 @@ they need a real Redis Stack):
 
 ```bash
 ./hack/redis-stack.sh &   # start Redis Stack
-REDIS_URL=redis://127.0.0.1:6379 cargo test --test redis_semantic -- --ignored
+REDIS_URL=redis://127.0.0.1:6379 \
+  cargo test --features redis-semantic --test redis_semantic -- --ignored
 ```
 
 `REDIS_URL` above only configures that test run; the running service reads

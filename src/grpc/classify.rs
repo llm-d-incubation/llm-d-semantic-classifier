@@ -354,20 +354,35 @@ impl ClassifyServer {
         let semantic: Arc<dyn crate::cache::SemanticCache> = if cache_cfg.strategy
             == "redis-semantic"
         {
-            match crate::cache::redis::RedisSemanticCache::connect(&cache_cfg, metrics.clone()) {
-                Ok(rc) => {
-                    eprintln!(
-                        "llm-d-sc: semantic cache enabled (redis-semantic, threshold {})",
-                        cache_cfg.threshold
-                    );
-                    Arc::new(rc)
+            #[cfg(feature = "redis-semantic")]
+            {
+                match crate::cache::redis::RedisSemanticCache::connect(&cache_cfg, metrics.clone())
+                {
+                    Ok(rc) => {
+                        eprintln!(
+                            "llm-d-sc: semantic cache enabled (redis-semantic, threshold {})",
+                            cache_cfg.threshold
+                        );
+                        Arc::new(rc)
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "llm-d-sc: redis-semantic unavailable ({e}); falling back to exact cache"
+                        );
+                        Arc::new(crate::cache::NoopSemanticCache)
+                    }
                 }
-                Err(e) => {
-                    eprintln!(
-                        "llm-d-sc: redis-semantic unavailable ({e}); falling back to exact cache"
-                    );
-                    Arc::new(crate::cache::NoopSemanticCache)
-                }
+            }
+            // Built without the `redis-semantic` feature: the strategy was
+            // requested but the backend is not compiled in. Fail open to the
+            // exact-only cache rather than refusing to start.
+            #[cfg(not(feature = "redis-semantic"))]
+            {
+                eprintln!(
+                    "llm-d-sc: LLM_D_SC_CACHE=redis-semantic requested but this binary was \
+                     built without the `redis-semantic` feature; falling back to exact cache"
+                );
+                Arc::new(crate::cache::NoopSemanticCache)
             }
         } else {
             Arc::new(crate::cache::NoopSemanticCache)
