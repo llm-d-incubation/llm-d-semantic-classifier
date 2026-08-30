@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use llm_d_sc::classify::{
     ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, ClassifyStatus,
-    RankedSignal, RuntimeMetadata,
+    Embedding, RankedSignal, RuntimeMetadata,
 };
 use llm_d_sc::grpc::classify::generated;
 use llm_d_sc::grpc::classify::ClassifyServiceImpl;
@@ -50,6 +50,20 @@ impl ClassifierRuntime for SlowClassifier {
             taxonomy_revision: "test".into(),
             artifact_digest: None,
         }
+    }
+
+    // This test double overrides `classify` directly to control the forward
+    // delay; `embed`/`rank` are never reached.
+    fn embed(&self, _input: &ClassificationInput) -> Result<Embedding, ClassifyError> {
+        unimplemented!("SlowClassifier overrides classify directly")
+    }
+
+    fn rank(
+        &self,
+        _embedding: &Embedding,
+        _input: &ClassificationInput,
+    ) -> Result<ClassificationResult, ClassifyError> {
+        unimplemented!("SlowClassifier overrides classify directly")
     }
 
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
