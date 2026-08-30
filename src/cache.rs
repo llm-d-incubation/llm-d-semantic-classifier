@@ -19,6 +19,8 @@
 //! The cache stores the typed [`crate::classify::ClassificationResult`], not a
 //! `String`.
 
+pub mod breaker;
+
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Condvar, Mutex};
