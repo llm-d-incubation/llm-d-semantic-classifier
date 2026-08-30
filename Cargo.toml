@@ -21,6 +21,13 @@ path = "src/bin/classify.rs"
 name = "llm-d-sc-gateway-probe"
 path = "src/bin/gateway-probe.rs"
 
+# Demo playground: only built when the `playground` feature is enabled, so the
+# default build never pulls tiny_http or the Redis backend.
+[[bin]]
+name = "llm-d-sc-playground"
+path = "src/bin/playground.rs"
+required-features = ["playground"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -50,10 +57,17 @@ tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-
 # rustc >= 1.80, so enabling the feature raises the effective toolchain floor.
 redis = { version = "0.32.2", features = ["r2d2"], optional = true }
 r2d2 = { version = "0.8.10", optional = true }
+# Pure-Rust, dependency-light HTTP server used ONLY by the demo playground
+# binary (feature `playground`). Never compiled into the default build.
+tiny_http = { version = "0.12", optional = true }
 
 [features]
 # Enables the Redis-backed semantic (L2) cache tier. Requires rustc >= 1.80.
 redis-semantic = ["dep:redis", "dep:r2d2"]
+# Builds the interactive demo playground binary (llm-d-sc-playground): a local
+# web UI over the real classifier + semantic cache. Implies redis-semantic, so
+# it also requires rustc >= 1.80.
+playground = ["redis-semantic", "dep:tiny_http"]
 
 [build-dependencies]
 tonic-prost-build = "0.14"

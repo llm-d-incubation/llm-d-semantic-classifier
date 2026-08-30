@@ -183,6 +183,22 @@ REDIS_URL=redis://127.0.0.1:6379 \
 `REDIS_URL` above only configures that test run; the running service reads
 `LLM_D_SC_REDIS_URL` instead.
 
+**Interactive playground.** To see the cache behave in a browser, one command
+starts Redis Stack, downloads the model if missing, and serves a local web UI:
+
+```bash
+./hack/playground      # then open http://127.0.0.1:8080
+```
+
+Classify a prompt, then a paraphrase of it: the paraphrase is served as an **L2
+semantic hit** (a similar prior prompt's label is reused after embedding), and
+re-sending the identical text is an **L1 exact hit** returned in well under a
+millisecond. It needs Docker (for Redis Stack) and a one-time ~90 MB model
+download (Python 3 + `huggingface_hub`, installed by the script if absent);
+without Docker it still runs, fail-open, with the exact cache only. The
+playground is built only with `--features playground`, so it never affects the
+default build.
+
 Two operational constraints apply when the semantic tier is enabled. Both are
 fail-open (they degrade to the normal compute path and never produce a wrong
 label), but they are silent, so plan for them:
