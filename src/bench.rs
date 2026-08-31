@@ -183,9 +183,11 @@ fn seeded_warm_context(cache_mode: CacheMode, seed: &str, run_id: u64, index: u6
 /// Miss-mode: every measured request must be a genuine miss, so
 /// `delta_misses == measured` and `delta_hits == 0`. Hit-mode: every measured
 /// request must be a genuine hit, so `delta_hits == measured` and
-/// `delta_misses == 0`. A violation (e.g. warmup/measured key collision after a
-/// refactor) returns a [`BenchError::Methodology`] instead of silently producing
-/// invalid benchmark numbers.
+/// `delta_misses == 0`. Both modes additionally require `delta_coalesced == 0`
+/// because serial measurement must never trigger single-flight coalescing. A
+/// violation (e.g. warmup/measured key collision after a refactor) returns a
+/// [`BenchError::Methodology`] instead of silently producing invalid benchmark
+/// numbers.
 fn verify_window(
     cache_mode: CacheMode,
     before: MetricsSnapshot,
@@ -194,6 +196,7 @@ fn verify_window(
 ) -> Result<(), BenchError> {
     let delta_hits = after.cache_hits.saturating_sub(before.cache_hits);
     let delta_misses = after.cache_misses.saturating_sub(before.cache_misses);
+    let delta_coalesced = after.cache_coalesced.saturating_sub(before.cache_coalesced);
     match cache_mode {
         CacheMode::Miss => {
             if delta_misses != measured {
@@ -206,6 +209,11 @@ fn verify_window(
                     "miss-mode methodology violation: expected 0 cache hits in the measured window, observed delta_hits={delta_hits}"
                 )));
             }
+            if delta_coalesced != 0 {
+                return Err(BenchError::Methodology(format!(
+                    "miss-mode methodology violation: expected 0 coalesced waits in the measured window, observed delta_coalesced={delta_coalesced}; serial measurement must not coalesce"
+                )));
+            }
         }
         CacheMode::Hit => {
             if delta_hits != measured {
@@ -216,6 +224,11 @@ fn verify_window(
             if delta_misses != 0 {
                 return Err(BenchError::Methodology(format!(
                     "hit-mode methodology violation: expected 0 cache misses in the measured window, observed delta_misses={delta_misses}"
+                )));
+            }
+            if delta_coalesced != 0 {
+                return Err(BenchError::Methodology(format!(
+                    "hit-mode methodology violation: expected 0 coalesced waits in the measured window, observed delta_coalesced={delta_coalesced}; serial measurement must not coalesce"
                 )));
             }
         }
@@ -592,12 +605,9 @@ mod tests {
     /// A snapshot helper: a metrics snapshot with the given cache counters.
     fn snap(hits: u64, misses: u64) -> MetricsSnapshot {
         MetricsSnapshot {
-            queue: std::time::Duration::ZERO,
-            tokenize: std::time::Duration::ZERO,
-            forward: std::time::Duration::ZERO,
-            total: std::time::Duration::ZERO,
             cache_hits: hits,
             cache_misses: misses,
+            ..Default::default()
         }
     }
 
@@ -629,5 +639,28 @@ mod tests {
         let err = verify_window(CacheMode::Hit, snap(0, 0), snap(100, 900), 1000)
             .expect_err("a hit window with un-pre-warmed measured keys must fail");
         assert!(err.to_string().contains("hit-mode"));
+    }
+
+    /// Both modes reject unexpected coalesced waits: serial measurement must
+    /// never trigger single-flight coalescing.
+    #[test]
+    fn methodology_rejects_unexpected_coalescing() {
+        let coalesced_after = MetricsSnapshot {
+            cache_misses: 1000,
+            cache_coalesced: 1,
+            ..Default::default()
+        };
+        let err = verify_window(CacheMode::Miss, snap(0, 0), coalesced_after, 1000)
+            .expect_err("miss-mode must reject coalesced waits");
+        assert!(err.to_string().contains("coalesced"));
+
+        let coalesced_after = MetricsSnapshot {
+            cache_hits: 1000,
+            cache_coalesced: 1,
+            ..Default::default()
+        };
+        let err = verify_window(CacheMode::Hit, snap(0, 0), coalesced_after, 1000)
+            .expect_err("hit-mode must reject coalesced waits");
+        assert!(err.to_string().contains("coalesced"));
     }
 }

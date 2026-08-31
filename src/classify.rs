@@ -23,10 +23,10 @@
 //! [`ClassificationResult`], keyed by a blake3 versioned fingerprint.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::cache::{CacheKey, SharedCache};
+use crate::cache::{CacheKey, CachePath, SharedCache};
 use crate::metrics::{LatencyStage, Metrics};
 use crate::ranker::{anchor_rank, cosine_rank, AnchorSet, Prototype};
 use crate::taxonomy::ClassifierDefinition;
@@ -277,31 +277,20 @@ where
             &normalized,
         );
         let metrics = self.metrics.clone();
-        // A miss runs the raw backend forward on the designated single-flight
-        // caller; a hit bypasses it entirely (AC-006). The flag distinguishes the
-        // two so the hit/miss counters partition every request.
-        let forward_ran = Arc::new(AtomicBool::new(false));
         let forward = {
             let runtime = self.runtime.clone();
-            let metrics = metrics.clone();
-            let forward_ran = forward_ran.clone();
             let input = ClassificationInput {
                 text: normalized,
                 requested_signals: input.requested_signals,
                 session_metadata: input.session_metadata,
             };
-            move || {
-                forward_ran.store(true, Ordering::SeqCst);
-                let _ = &metrics;
-                runtime.classify(input)
-            }
+            move || runtime.classify(input)
         };
-        let result = self.cache.classify_concurrent(key, forward);
-        // Classify the request as a cache hit or miss and expose the counters.
-        if forward_ran.load(Ordering::SeqCst) {
-            metrics.record_cache_miss();
-        } else {
-            metrics.record_cache_hit();
+        let (result, path) = self.cache.classify_concurrent(key, forward);
+        match path {
+            CachePath::Hit => metrics.record_cache_hit(),
+            CachePath::Miss => metrics.record_cache_miss(),
+            CachePath::Coalesced => metrics.record_cache_coalesced(),
         }
         // Queue and Total are deliberately NOT recorded here. The executor owns
         // Queue (it is the only component that knows how long a job waited), and
