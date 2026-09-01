@@ -15,6 +15,21 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
+
+# Layer 1: copy manifests so dependency compilation is cacheable.
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src/bin \
+ && echo 'fn main() {}' > src/lib.rs \
+ && echo 'fn main() {}' > src/bin/server.rs \
+ && echo 'fn main() {}' > src/bin/classify.rs \
+ && echo 'fn main() {}' > src/bin/gateway-probe.rs \
+ && cargo build --release \
+        --bin llm-d-sc-server \
+        --bin llm-d-sc-classify \
+        --bin llm-d-sc-gateway-probe \
+ && rm -rf target/release/deps target/release/.fingerprint target/release/build
+
+# Layer 2: copy source; only the final build is incremental.
 COPY . .
 RUN cargo build --release \
       --bin llm-d-sc-server \
