@@ -73,7 +73,7 @@ fn main() -> io::Result<()> {
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(interval));
                 let snap = metrics.snapshot();
-                let served = snap.cache_hits + snap.cache_misses;
+                let served = snap.cache_hits + snap.cache_misses + snap.cache_coalesced;
                 if served == last_total {
                     continue;
                 }
@@ -84,11 +84,12 @@ fn main() -> io::Result<()> {
                 let f = stage(LatencyStage::Forward);
                 let tot = stage(LatencyStage::Total);
                 eprintln!(
-                    "llm-d-sc metrics: served={served} hits={} misses={} | \
+                    "llm-d-sc metrics: served={served} hits={} misses={} coalesced={} | \
                      queue p50={:?} p99={:?} | tokenize p50={:?} p99={:?} | \
                      forward p50={:?} p99={:?} | total p50={:?} p99={:?}",
                     snap.cache_hits,
                     snap.cache_misses,
+                    snap.cache_coalesced,
                     q.p50,
                     q.p99,
                     t.p50,
