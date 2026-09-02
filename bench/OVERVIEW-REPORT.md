@@ -588,9 +588,10 @@ traffic quietly collapses onto the default cluster.
 This Praxis build's admin `/metrics` returns HTTP 200 with a **zero-byte body**,
 so there is currently no gateway-side counter to alarm on either.
 
-> **Recommendations.** Do not ship `timeout_ms: 100` with a CPU classifier — it
-> loses the majority of routing decisions even when the cache is warm. Export and
-> **alarm on the fail-open rate**; a gateway that silently stops routing is worse
+> **Recommendations.** *(Corrected — the "loses the majority of routing decisions
+> even when warm" claim was retracted; see the RETRACTED section above.)*
+> `timeout_ms: 100` is defensible for a warm, steady-state deployment but cannot
+> survive a cold cache. Export and **alarm on the fail-open rate**; a gateway that silently stops routing is worse
 > than one that errors, because an erroring gateway pages someone. Treat
 > "classification coverage" as an SLI in its own right, separate from latency and
 > error rate.

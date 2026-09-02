@@ -1,7 +1,7 @@
 # Round 2 — Praxis and llm-d, characterised
 
 **Cluster:** CoreWeave *waldorf* · **Namespace:** `cnuland-dev` · **Branch:** `v0.2-staging`
-**Runs:** 269 captured arms · raw per-request samples retained
+**Runs:** 311 captured arms · raw per-request samples retained
 
 Round 1 produced two wrong conclusions and one retracted finding. Every one came
 from an unverified assumption rather than a bad measurement, so round 2 was rebuilt
@@ -23,7 +23,84 @@ for complete distributions.
 
 ---
 
-## Headline: gateway capacity, same backends, same driver
+## ⚠ MAJOR CONFOUND: `RAYON_NUM_THREADS` was never controlled
+
+**Every novel-prompt (cache-miss) capacity number in rounds 1 and 2 is confounded,
+and the "16 workers / 16 CPU is ideal" recommendation is withdrawn.**
+
+llm-d-sc never sets `RAYON_NUM_THREADS` — not in the deployment, not in the
+process environment, and nowhere in `src/` or `Cargo.toml`. Rayon 1.12 is in the
+dependency tree via `candle-core`, so it silently sizes its global pool to
+`available_parallelism()`, which under a cgroup quota equals **the CPU limit**.
+
+The vertical-scaling sweep varied `LLM_D_SC_INFERENCE_WORKERS` *and* the CPU limit
+together, so it moved **three** variables at once: executor width, CPU allowance,
+and Rayon's intra-op pool width. That violates this campaign's own one-variable
+rule.
+
+Isolated properly — workers **fixed at 16**, CPU **fixed at 16**, only Rayon
+varying:
+
+| `RAYON_NUM_THREADS` | req/s | p50 | p99 | vs unset |
+|---|---:|---:|---:|---:|
+| unset (the shipped default) | 118.6 | 273.35 ms | 333.63 ms | 1.00× |
+| **1** | **788.4** | **40.30 ms** | **51.06 ms** | **6.65×** |
+| 2 | 126.2 | 250.11 ms | 347.30 ms | 1.06× |
+| 4 | 210.0 | 152.04 ms | 180.78 ms | 1.77× |
+| 8 | 299.7 | 106.34 ms | 126.14 ms | 2.53× |
+| 16 | 334.7 | 96.06 ms | 112.47 ms | 2.82× |
+| 32 | 196.4 | 169.90 ms | 195.69 ms | 1.66× |
+
+**`RAYON_NUM_THREADS=1` is 6.65× the default**, and the curve is non-monotonic.
+
+The mechanism is an intra-op/inter-op parallelism collision: Rayon parallelises
+*within* a single forward, while executor workers run *many* forwards at once.
+With 16 workers already supplying inter-op parallelism, Rayon's work-stealing
+across a shared pool contends rather than helps. The best configuration is the
+**opposite of the default** — one Rayon thread per forward, parallelism from
+worker count instead.
+
+This independently reproduces Intel's finding that Rayon configuration alone moved
+unique-miss throughput by an order of magnitude.
+
+Two honest caveats on this table itself: it is **one run per cell**, and `unset`
+(118.6) differs from `RAYON=16` (334.7) by 2.8× despite both showing 50 threads —
+a gap this data cannot explain. It needs the replication described below before
+any production recommendation is drawn from it.
+
+**Consequence:** treat every cache-miss capacity figure in these reports as a
+lower bound obtained under an uncontrolled Rayon configuration. Cache-*hit*
+figures are unaffected (no model forward runs, so Rayon is not on that path).
+
+## A note on what "ladder" means here
+
+Every ladder in this campaign is **closed-loop**: the driver holds N requests
+outstanding and issues a replacement as each completes. It is a
+**concurrency/capacity sweep, not an arrival-rate sweep**. That distinction
+matters under overload — when latency rises, a closed-loop client automatically
+slows down, which masks the queue explosion an open-loop generator would expose.
+A true open-loop campaign (fixed and Poisson arrival rates, independent of
+response latency) is listed in *What is still open* and is the correct instrument
+for saturation claims.
+
+## Cross-stack observations — NOT controlled comparisons
+
+The table below is easy to misread as a leaderboard. It is not one. The rows differ
+in CPU allocation (Praxis 16 req/32 limit; Envoy 4/12 + IPP 8/16; EPP 4/8), in what
+the gateway actually decides (cluster vs endpoint), and in backend latency
+configuration between arms. **The only defensible claims in this campaign are the
+paired ones** — each path against itself with classification removed:
+
+| Paired comparison | With classification | Without | Cost |
+|---|---:|---:|---:|
+| Praxis @ c128 | 34,242 req/s | 40,838 req/s | −16.2 % |
+| llm-d IPP @ c128 | 38,632 req/s | 57,895 req/s | −33.3 % |
+| llm-d EPP @ c256 (gateway vs direct) | 11,296 req/s | 47,589 req/s | −76.3 % |
+
+Read the table below only as *observations about different stacks under different
+conditions*, never as "X is N times faster than Y".
+
+## Cross-stack table (uncontrolled): gateway capacity, same backends, same driver
 
 The single most useful comparison in this campaign. Both gateways front the
 **identical** vllm-vcr backends, so the difference is the gateway.
@@ -31,9 +108,9 @@ The single most useful comparison in this campaign. Both gateways front the
 | Path | llm-d-sc in path? | Knee | Peak req/s | **Peak req/min** | p99 at knee | % of backend ceiling |
 |---|:--:|---:|---:|---:|---:|---:|
 | Praxis control (static routing) | no | 1024 | 65,901 | 3,954,073 | 26.29 ms | — |
-| **Backend direct (ceiling)** | n/a | 256 | **47,589** | 2,855,350 | 8.08 ms | 100 % |
-| **Praxis + llm-d-sc classification** | **yes** | 128 | **37,738** | 2,264,276 | 6.27 ms | **79 %** |
-| **llm-d inference gateway (EPP)** | **no** | 32 | **11,296** | 677,744 | 6.38 ms | **24 %** |
+| **Backend direct (peak)** | n/a | 1024 | **61,041** | 3,662,483 | 28.54 ms | 100 % |
+| **Praxis + llm-d-sc classification** | **yes** | 128 | **37,738** | 2,264,276 | 6.27 ms | **61.8 %** |
+| **llm-d inference gateway (EPP)** | **no** | 32 | **11,296** | 677,744 | 6.38 ms | **18.5 %** |
 | **llm-d IPP + llm-d-sc** (`ext_proc`→IPP) | **yes** | 256 | **59,925** | 3,595,473 | 9.33 ms | — |
 | llm-d IPP control (no `ext_proc`) | no | 512 | 126,708 | 7,602,463 | 7.98 ms | — |
 
@@ -73,8 +150,13 @@ Neither reading is a like-for-like *routing-quality* comparison: llm-d's EPP pic
 an endpoint from live queue-depth and prefix-cache state, which Praxis's static
 control listener does not attempt. This is a capacity comparison.
 
-**Praxis reaches 79 % of what the backends can absorb unaided, while carrying
-semantic classification.**
+**Praxis reaches 61.8 % of the backends' measured peak while carrying semantic
+classification.**
+
+*(Corrected. An earlier revision said 79 %, taken against 47,589 req/s — the
+concurrency-256 point rather than the ladder's peak. The direct ladder continues
+to 58,704 at c512 and 61,041 at c1024, so 61,041 is the measured maximum and
+37,738/61,041 = 61.8 %.)*
 
 > **Do not add the vLLM SR adapter to this table.** An earlier revision listed it
 > here and it was misread as a faster gateway. It is not a gateway: it classifies
@@ -381,16 +463,61 @@ retrograde past its knee — 11,296 req/s at concurrency 256 falls to 9,201 at
 llm-d context sensitivity is steeper than Praxis's cached path: 9,597 req/s at
 64 B down to 4,179 at 64 KB (−56 %).
 
-## What is still open
+## What is still open — the round-3 work list
 
-* **The EPP gateway arm still has no llm-d-sc**, and the IPP arm is a different
-  insertion point (payload processor, not endpoint picker). Classification cost
-  *on the EPP path specifically* remains unmeasured.
-* **CPU parity between the gateways was not controlled.** Praxis ran on 16 req/32
-  limit; Envoy+IPP on 4/12 and 8/16. The IPP path's advantage may be partly or
-  wholly a proxy-efficiency difference rather than an architectural one.
-* **No PR raised** for the vLLM SR adapter. It works and is benchmarked here, but
-  upstreaming it needs a decision on where the softmax belongs: in an adapter, or
-  as an optional normalised-score mode in llm-d-sc itself.
-* **P5 gateway scaling** is backend-bound past 2 replicas.
-* **No accuracy evaluation** of semantic-cache hits at threshold 0.90.
+In priority order, from an external methodological review plus the Rayon finding
+above:
+
+1. **Rayon × worker matrix.** `RAYON_NUM_THREADS` × `LLM_D_SC_INFERENCE_WORKERS`
+   with CPU explicitly controlled (W1/RT1, W1/RT2, W2/RT1 … W16/RT1). Until this
+   lands, **no production recommendation should be drawn from any cache-miss
+   number**, including the withdrawn "16 workers / 16 CPU is ideal".
+2. **True open-loop load generation.** Fixed and Poisson arrival rates
+   (100/250/500/1k/2k/5k/10k RPS) independent of response latency. Closed-loop
+   sweeps cannot observe queue explosion, because the client slows down when
+   latency rises.
+3. **Replication with confidence intervals.** 2 M requests from one 20-second run
+   is not ten experiments. Take the 20–30 headline cells, run 5–10 randomised
+   repetitions, and report CIs on throughput, p50/p95/p99, classification
+   overhead and scaling efficiency.
+4. **A realistic utterance corpus.** The driver currently repeats one filler
+   sentence to a target byte length — good for deterministic tokenizer and
+   context-size control, useless as traffic. Needs 10k–50k frozen, diverse
+   utterances (networking, Kubernetes, security, code, general QA, reasoning,
+   malformed, multilingual, tool/JSON, long-context) exercised under uniform,
+   production-skewed, bursty, Zipfian and 100%-unique distributions.
+5. **Real route selection.** The 2→32 route result proves route-table cardinality
+   is nearly free; it does **not** prove routing stays *correct* across 32 routes,
+   because every cluster pointed at the same backend. Needs uniquely tagged stub
+   backends and a confusion matrix, per-route distribution, and p50/p95/p99 by
+   route.
+6. **Novel-prompt scaling at thousands of RPS**, across 1/2/4/8/16/32 replicas,
+   *after* the Rayon configuration is fixed.
+7. **More backend capacity before repeating Praxis horizontal scaling** — P5 is
+   backend-bound past two replicas.
+8. **Network impairment sweeps**: RTT, jitter, loss, TLS/mTLS, cross-zone,
+   connection churn.
+9. **Pod loss, rolling update and autoscaling under sustained open-loop load.**
+10. **Persist premise assertions into each result JSON**, and make report
+    generation refuse any arm whose assertions failed.
+
+### Reproducibility gap in the current archive
+
+Round 2 claims the harness "refuses to report an arm whose premises it cannot
+confirm". The code does not yet enforce that. `measure()` computes
+`premise_cache_ok`, `premise_cache_note` and `routed_pct` **after** `scbench` has
+already written `results/json/<arm>.json`, and attaches them only to
+`/tmp/r2-record.jsonl`, which is not archived. `report2.py` then reads the
+canonical JSON without checking any premise flag. **The archived evidence
+therefore cannot demonstrate that every published arm passed validation.** Item 10
+above fixes this; until then, treat the premise checks as advisory rather than
+enforced.
+
+### Still unmeasured
+
+* Classification cost **on the EPP path specifically** (the IPP arm is a different
+  insertion point — payload processor, not endpoint picker).
+* **CPU parity between gateways** was not controlled.
+* **Accuracy** of semantic-cache hits at threshold 0.90.
+* **Accuracy** of the softmax transform in the vLLM SR adapter — ranking is
+  preserved exactly, but the scores are not calibrated probabilities.
