@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "c20-redis-semantic-novel",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 16,
+  "connections": 16,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 78477,
+  "warmup_requests": 100,
+  "measured_requests": 42815,
+  "wall_secs": 25.001098626,
+  "throughput_rps": 1712.5247430316665,
+  "throughput_rpm": 102751.48458189999,
+  "offered_concurrency": 16,
+  "implied_mean_ms": 9.342930702230527,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 42815
+  },
+  "latency": {
+    "count": 42815,
+    "min_ms": 0.55432,
+    "mean_ms": 9.320170007357234,
+    "stddev_ms": 26.30275557304946,
+    "p50_ms": 1.831721,
+    "p90_ms": 2.651118,
+    "p95_ms": 102.213157,
+    "p99_ms": 103.136368,
+    "p999_ms": 103.836237,
+    "max_ms": 104.841615
+  },
+  "started_unix": 1788378479
+}

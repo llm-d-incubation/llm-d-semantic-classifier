@@ -355,7 +355,47 @@ Redis flushed between arms, 2,000 distinct keys cycled:
 8,000 = 4 replicas × 2,000 keys. **Identical.** The L2 tier eliminated exactly
 zero model forwards. Replica B did not reuse replica A's work.
 
-### Why — and it is architectural, not a defect
+### It WORKS — that was never verified in the first pass, and it should have been
+
+An earlier revision argued the L2 tier saves nothing, but never checked that it
+functionally hits at all. Those are different claims. It does hit, and it hits
+almost every time.
+
+On an L2 hit the code returns **before** `semantic.insert`, so Redis stops
+growing. Vectors-stored versus requests-issued therefore reads out the hit rate
+directly. Flushing Redis and running 3,425 novel prompts:
+
+| Metric | Value |
+|---|---:|
+| Requests issued | 3,425 |
+| Vectors stored in Redis | **6** |
+| **Implied L2 hit rate** | **99.8 %** |
+
+Throughput over that run was 114 req/s, against 116 req/s with L2 disabled —
+identical. (The apparent p50 difference, 134.7 ms vs 278.1 ms, is Little's law:
+concurrency 16 versus 32, not a saving.)
+
+So the tier is not broken and not rarely-hitting. **It hits nearly always and
+still saves nothing measurable**, which is exactly what the code predicts.
+
+It does not help through the gateway either. On novel prompts through Praxis at
+`timeout_ms: 100`:
+
+| Cache | req/s | Classified correctly | Redis vectors |
+|---|---:|---:|---:|
+| exact | 1,859 | 6.6 % | 0 |
+| redis-semantic | 1,713 | 7.4 % | 3 |
+
+An L2 hit rate near 100 % moves routing correctness by under a percentage point,
+because the embedding still has to happen before the lookup can be issued.
+
+> **Accuracy warning, now demonstrable.** 3,425 distinct prompts collapsed into
+> **6** cached answers at threshold 0.90. These synthetic prompts share identical
+> filler text so this overstates the effect for real traffic, but the mechanism is
+> real: at 0.90 the tier will serve one prompt's label for another. Any decision
+> to enable it needs an accuracy evaluation, which this campaign did not run.
+
+### Why it cannot help — architectural, not a defect
 
 In `ServiceCore::classify` the forward closure runs:
 
@@ -473,30 +513,47 @@ saturation", not "+2 ms per request".
 The backends were verified not to be the limit: `vcr-small` × 3 with zero
 simulated latency sustains 45,399 req/s directly, above the gateway ceiling.
 
-### Most routing decisions are silently lost at the default timeout
+### RETRACTED: "most routing decisions are silently lost"
 
-This is the single most important operational finding in the campaign.
+**A previous revision of this document claimed that 74–99 % of routing decisions
+were lost at `timeout_ms: 100`, even with a warm cache. That claim was wrong and
+is withdrawn.** It was an artifact of my own benchmark, not a property of
+llm-d-sc or Praxis. Publishing the retraction rather than deleting the claim
+(house rule 8).
 
-With the tiers made latency-distinguishable (`large` = 200 ms, `small`/`general`
-= 0 ms), every request's destination is readable straight off its own latency, so
-the fraction that was *actually classified* can be counted directly. Using
-`timeout_ms: 1000` as the reference — high enough that classification always
-completes — gives the true label distribution to compare against:
+The error: warmup was counted in **requests**, not in **distinct keys covered**.
+With a 300-key working set, many warmup requests re-hit already-warm keys, so the
+cache was never fully populated before measurement began. The cache-miss forwards
+that leaked into the measurement window exceeded the 100 ms timeout and failed
+open — and I attributed that to the timeout rather than to my warmup.
 
-| Hit ratio | Reference (t=1000) | t=300 | **t=100 (POC default)** | **Decisions lost at t=100** |
-|---:|---:|---:|---:|---:|
-| 0 % | 99.0 % | 99.2 % | **1.3 %** | **98.7 %** |
-| 50 % | 73.8 % | 56.6 % | 4.1 % | 94.4 % |
-| 90 % | 96.5 % | 83.0 % | 25.3 % | 73.8 % |
-| 100 % | 92.5 % | 94.0 % | 23.3 % | **74.8 %** |
+Isolating warmup as the only variable settles it. Same keyspace, same concurrency
+(32), same `timeout_ms: 100`, `LLM_D_SC_CACHE=exact`:
 
-**At the shipped default, between 74 % and 99 % of routing decisions never
-happen.** Traffic silently falls through to the default cluster.
+| Keyspace | Warmup requests | Classified correctly |
+|---:|---:|---:|
+| 1 | 800 | 100.0 % |
+| 10 | 800 | 100.0 % |
+| 50 | 1,500 | 100.0 % |
+| 300 | 3,000 | 24.7 % ← under-warmed |
+| **300** | **20,000** | **99.7 %** |
 
-The first pass reported this only for novel prompts. It is worse than that: even
-at a **100 % cache hit ratio**, where the classifier answers in ~15 µs, three
-quarters of decisions are still lost under concurrency. Raising the timeout to
-300 ms recovers most of them, at the cost of throughput (see the sweep below).
+A separate concurrency sweep confirms the same conclusion from the other
+direction: with a fully warm cache, routing is **100 % correct at every offered
+concurrency from 1 to 128** at `timeout_ms: 100`.
+
+### What is actually true about the timeout
+
+The real, and much narrower, statement:
+
+* **A warm classifier routes correctly at `timeout_ms: 100`** — at any
+  concurrency tested, for any working set that has actually been warmed.
+* **A cache MISS costs ~480 ms and cannot complete inside a 100 ms budget**, so
+  genuinely novel prompts fail open to the default cluster. That part of the
+  original finding stands.
+* Therefore the exposure is **cold start and working-set churn**, not steady
+  state. A service restart, a scale-up, or a shift in the prompt distribution
+  produces a window in which routing silently degrades until the cache refills.
 
 | `timeout_ms` | req/s (novel prompts) | p50 | Outcome |
 |---:|---:|---:|---|
@@ -504,6 +561,12 @@ quarters of decisions are still lost under concurrency. Raising the timeout to
 | 250 | 72 | 273.4 ms | classifies |
 | 500 | 64 | 249.0 ms | classifies |
 | 1000 | 23 | 683.3 ms | classifies, degraded |
+
+**Recommendation, revised.** `timeout_ms: 100` is defensible for a warm,
+steady-state deployment. What it does not survive is a cold cache. Either
+pre-warm the expected prompt distribution at startup, or accept that routing is
+approximate until the cache fills — and in both cases measure the fail-open rate
+so the cold window is visible rather than assumed.
 
 ### A classifier outage is invisible — it looks like a speed-up
 
@@ -589,7 +652,7 @@ Stated plainly, per house rule 7:
 | 3 | **Client connection pool of 32–64** — worth 6.3× on identical load | §2b |
 | 4 | Hold **offered concurrency 32–64** per replica | §1b |
 | 5 | Size for **256 in-flight per replica**; scale out past that | §1a |
-| 6 | **Do not ship `timeout_ms: 100`** — it loses 74–99 % of routing decisions even with a warm cache | §6 |
+| 6 | `timeout_ms: 100` is fine WARM; pre-warm the cache or routing degrades silently while cold | §6 |
 | 7 | **Alarm on fail-open rate / classification coverage** — an outage looks like a speed-up | §6 |
 | 8 | Keep **`LLM_D_SC_CACHE=exact`** — no configuration makes L2 pay today | §4 |
 | 9 | Classify **turn deltas, not documents** | §5 |

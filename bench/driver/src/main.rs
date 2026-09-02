@@ -236,8 +236,32 @@ struct Report {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+    let mut args = Args::parse();
     let targets: Vec<String> = args.target.split(',').map(|s| s.trim().to_string()).collect();
+
+    // Warmup must be expressed in KEYS COVERED, not requests issued.
+    //
+    // With a keyspace of K, warmup requests are spread across all K keys, so a
+    // warmup of only a few multiples of K leaves part of the working set cold.
+    // Those stragglers then take a full model forward INSIDE the measurement
+    // window, which looks exactly like a service defect: elevated latency and,
+    // behind a gateway with a short classify timeout, apparent fail-open
+    // routing. That mistake produced a since-retracted finding in this
+    // campaign's first Praxis pass, so the floor is enforced here rather than
+    // left to the caller to remember.
+    if args.cache_mode != "miss" {
+        let floor = args.keyspace.saturating_mul(40).max(2000);
+        if args.warmup < floor {
+            eprintln!(
+                "scbench: raising warmup {} -> {} to cover a keyspace of {} \
+                 (>=40 requests per key; a partially warm cache is measured as \
+                 service latency)",
+                args.warmup, floor, args.keyspace
+            );
+            args.warmup = floor;
+        }
+    }
+    let args = args;
 
     let counter = Arc::new(AtomicU64::new(0));
     let errors = Arc::new(AtomicU64::new(0));
