@@ -87,6 +87,7 @@ fn i090_executor_workers_run_forwards_in_parallel() {
                     text: format!("job {i}"),
                     requested_signals: vec!["sensitivity".into()],
                     session_metadata: Default::default(),
+                    context_completeness: Default::default(),
                 })
                 .expect("bound of 32 must admit 4 jobs")
         })
@@ -137,6 +138,7 @@ fn i091_single_worker_executor_is_observably_serial() {
                     text: format!("job {i}"),
                     requested_signals: vec!["sensitivity".into()],
                     session_metadata: Default::default(),
+                    context_completeness: Default::default(),
                 })
                 .expect("must admit")
         })

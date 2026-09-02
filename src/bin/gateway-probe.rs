@@ -54,6 +54,7 @@ fn main() {
         // serves, and asserting one couples the tool to a single deployment.
         // An empty list means "no constraint" and the server returns its signal.
         signals: Vec::new(),
+        context_completeness: Default::default(),
     };
 
     // Warm the connection and the model so the first sample does not carry

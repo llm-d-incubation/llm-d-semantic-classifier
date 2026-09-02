@@ -26,6 +26,7 @@ fn request(id: &str, text: &str) -> ClassifyRequest {
         session_id: "sess-taxonomy".into(),
         context: text.into(),
         signals: Vec::new(),
+        context_completeness: Default::default(),
     }
 }
 

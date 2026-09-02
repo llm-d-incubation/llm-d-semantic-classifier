@@ -24,6 +24,7 @@ fn full_context_request() -> ClassifyRequest {
         session_id: "sess-045".to_string(),
         context: "this is a golden sensitivity input".to_string(),
         signals: Vec::new(),
+        context_completeness: llm_d_sc::grpc::classify::generated::ContextCompleteness::Full as i32,
     }
 }
 
@@ -91,5 +92,60 @@ fn i045_restart_full_context_recomputes_correctly() {
     assert_eq!(
         before.ranked, after.ranked,
         "AC-013: restart + complete context must recompute an equivalent result"
+    );
+}
+
+/// I-046: a restarted instance has no disposable cache or session feature
+/// state. A delta-only follow-up must therefore abstain, while full context can
+/// still be classified normally.
+#[test]
+fn i046_restart_delta_context_abstains() {
+    // Establish that the original instance could classify full context, then
+    // discard it together with its disposable caches as a restart would.
+    let server_a = ClassifyServer::bind("127.0.0.1:0").expect("pre-restart server must bind");
+    let mut client_a = llm_d_sc::grpc::classify::ClassifyClient::connect(server_a.local_addr())
+        .expect("pre-restart client must connect");
+    let full = client_a
+        .classify(full_context_request())
+        .expect("pre-restart full context must classify");
+    assert_eq!(
+        full.status,
+        llm_d_sc::grpc::classify::generated::ClassificationStatus::Ok as i32
+    );
+    drop(client_a);
+    drop(server_a);
+
+    let server_b = ClassifyServer::bind("127.0.0.1:0").expect("post-restart server must bind");
+    let mut client_b = llm_d_sc::grpc::classify::ClassifyClient::connect(server_b.local_addr())
+        .expect("post-restart client must connect");
+
+    let response = client_b
+        .classify(ClassifyRequest {
+            request_id: "req-046".to_string(),
+            session_id: "sess-046".to_string(),
+            context: "do that again".to_string(),
+            signals: Vec::new(),
+            context_completeness: llm_d_sc::grpc::classify::generated::ContextCompleteness::Delta
+                as i32,
+        })
+        .expect("delta request must receive a typed response");
+
+    assert_eq!(
+        response.status,
+        llm_d_sc::grpc::classify::generated::ClassificationStatus::Abstain as i32,
+        "a delta-only request after cache loss must abstain"
+    );
+    assert!(
+        response.ranked.is_empty(),
+        "abstention must not contain a label"
+    );
+    let snapshot = server_b.metrics_snapshot();
+    assert_eq!(
+        snapshot.cache_hits, 0,
+        "delta request must not read the cache"
+    );
+    assert_eq!(
+        snapshot.cache_misses, 0,
+        "delta request must not run a forward"
     );
 }

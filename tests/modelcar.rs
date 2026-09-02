@@ -152,6 +152,7 @@ fn i063_service_starts_from_artifact_with_hf_egress_disabled() {
             text: "What is the capital of Norway?".to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: Default::default(),
+            context_completeness: Default::default(),
         })
         .expect("offline classification must succeed");
     assert!(!result.ranked.is_empty());

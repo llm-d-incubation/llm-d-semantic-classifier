@@ -49,6 +49,7 @@ fn real_served_path_classifies_from_actual_embedding() {
             session_id: "sess-real".to_string(),
             context: WARMUP_INPUT.to_string(),
             signals: Vec::new(),
+            context_completeness: Default::default(),
         })
         .expect("real classify must succeed");
 

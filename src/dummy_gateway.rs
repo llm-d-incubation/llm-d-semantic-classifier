@@ -83,6 +83,7 @@ impl DummyGateway {
             session_id: req.session_id.clone(),
             context: req.context.clone(),
             signals: req.signals.clone(),
+            context_completeness: Default::default(),
         };
 
         let start = std::time::Instant::now();
