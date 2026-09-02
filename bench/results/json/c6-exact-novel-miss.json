@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "label": "c6-exact-novel-miss",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 32,
+  "connections": 32,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "keyspace": 1,
+  "run_id": 1788367221,
+  "warmup_requests": 100,
+  "measured_requests": 2687,
+  "wall_secs": 40.001277475,
+  "throughput_rps": 67.17285470893576,
+  "throughput_rpm": 4030.3712825361454,
+  "offered_concurrency": 32,
+  "implied_mean_ms": 476.38291001116494,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "OK": 2687
+  },
+  "latency": {
+    "count": 2687,
+    "min_ms": 424.582972,
+    "mean_ms": 476.18029450762936,
+    "stddev_ms": 15.013204018134063,
+    "p50_ms": 476.461189,
+    "p90_ms": 492.31656,
+    "p95_ms": 498.732837,
+    "p99_ms": 519.764955,
+    "p999_ms": 557.257878,
+    "max_ms": 572.868879
+  },
+  "started_unix": 1788367223
+}

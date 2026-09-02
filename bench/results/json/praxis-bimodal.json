@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "label": "praxis-bimodal",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 32,
+  "connections": 32,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "keyspace": 1,
+  "run_id": 95,
+  "warmup_requests": 300,
+  "measured_requests": 4000,
+  "wall_secs": 3.33487683,
+  "throughput_rps": 1199.4445983781657,
+  "throughput_rpm": 71966.67590268994,
+  "offered_concurrency": 32,
+  "implied_mean_ms": 26.67901464,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 4000
+  },
+  "latency": {
+    "count": 4000,
+    "min_ms": 21.379343,
+    "mean_ms": 26.56885665625,
+    "stddev_ms": 4.547112642457167,
+    "p50_ms": 24.773067,
+    "p90_ms": 32.753008,
+    "p95_ms": 34.766591,
+    "p99_ms": 41.344305,
+    "p999_ms": 63.446376,
+    "max_ms": 63.494252
+  },
+  "started_unix": 1788366241
+}

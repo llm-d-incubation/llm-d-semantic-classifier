@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "label": "praxis-ovh-8080",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 32,
+  "connections": 32,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "keyspace": 1,
+  "run_id": 96,
+  "warmup_requests": 2000,
+  "measured_requests": 6000,
+  "wall_secs": 4.721659005,
+  "throughput_rps": 1270.7397958315712,
+  "throughput_rpm": 76244.38774989427,
+  "offered_concurrency": 32,
+  "implied_mean_ms": 25.18218136,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 6000
+  },
+  "latency": {
+    "count": 6000,
+    "min_ms": 20.979367,
+    "mean_ms": 25.18776420833333,
+    "stddev_ms": 6.820522950396841,
+    "p50_ms": 24.424713,
+    "p90_ms": 27.655378,
+    "p95_ms": 28.490228,
+    "p99_ms": 35.52814,
+    "p999_ms": 119.632722,
+    "max_ms": 122.594534
+  },
+  "started_unix": 1788366302
+}

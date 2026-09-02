@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "label": "praxis-novel",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 16,
+  "connections": 16,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "keyspace": 1,
+  "run_id": 98,
+  "warmup_requests": 100,
+  "measured_requests": 1200,
+  "wall_secs": 3.204331509,
+  "throughput_rps": 374.49308744415555,
+  "throughput_rpm": 22469.585246649334,
+  "offered_concurrency": 16,
+  "implied_mean_ms": 42.724420120000005,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 1200
+  },
+  "latency": {
+    "count": 1200,
+    "min_ms": 21.003677,
+    "mean_ms": 41.43957517666667,
+    "stddev_ms": 37.23321446753275,
+    "p50_ms": 23.994229,
+    "p90_ms": 123.353476,
+    "p95_ms": 123.866345,
+    "p99_ms": 124.833385,
+    "p999_ms": 125.48667,
+    "max_ms": 125.500064
+  },
+  "started_unix": 1788366386
+}

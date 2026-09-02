@@ -1,0 +1,3 @@
+# Raw per-request samples live on the campaign PVC (Retain policy) -- ~332 MB
+# gzipped. Excluded for size only; see MANIFEST.md for how to fetch them.
+raw/

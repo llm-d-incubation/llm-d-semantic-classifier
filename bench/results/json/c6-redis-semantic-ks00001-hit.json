@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "label": "c6-redis-semantic-ks00001-hit",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 128,
+  "connections": 64,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "keyspace": 1,
+  "run_id": 1788367271,
+  "warmup_requests": 2000,
+  "measured_requests": 2512867,
+  "wall_secs": 25.001020042,
+  "throughput_rps": 100510.57899951904,
+  "throughput_rpm": 6030634.739971142,
+  "offered_concurrency": 128,
+  "implied_mean_ms": 1.273497787736478,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "OK": 2512867
+  },
+  "latency": {
+    "count": 2512867,
+    "min_ms": 0.082672,
+    "mean_ms": 1.2729313701517033,
+    "stddev_ms": 6.339621696339672,
+    "p50_ms": 0.22188,
+    "p90_ms": 0.433893,
+    "p95_ms": 0.592404,
+    "p99_ms": 40.951148,
+    "p999_ms": 41.990028,
+    "max_ms": 50.815149
+  },
+  "started_unix": 1788367272
+}

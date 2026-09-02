@@ -72,11 +72,22 @@ data:
               - name: general
                 endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
 
-      # ---- control arm: same path, no classification ---------------------------
+      # ---- control arm: same path, STATIC cluster selection ---------------------
+      # `router` picks the cluster from a static path rule instead of from a
+      # classification. That makes it a tighter control than simply deleting the
+      # filter: both chains select a cluster and then load-balance, so the delta
+      # between :8080 and :8081 is the cost of DECIDING semantically -- the gRPC hop
+      # to llm-d-sc plus the classify itself -- and nothing else. Praxis also
+      # requires a cluster-selecting filter ahead of load_balancer and fails
+      # validation without one.
       - name: baseline
         filters:
           - filter: request_id
           - filter: access_log
+          - filter: router
+            routes:
+              - path_prefix: "/"
+                cluster: general
           - filter: load_balancer
             clusters:
               - name: general
@@ -96,6 +107,14 @@ spec:
       labels: {app: praxis, component: gateway}
     spec:
       nodeSelector: {kubernetes.io/hostname: gf48cf2}
+      # Praxis refuses to run as UID 0 -- running a proxy as root is a security
+      # risk and it fails closed rather than warning. All three listeners are
+      # above 1024, so no CAP_NET_BIND_SERVICE is needed; an ordinary non-root
+      # UID is enough, and is preferable to setting insecure_options.allow_root.
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
       containers:
         - name: praxis
           image: debian:bookworm-slim
