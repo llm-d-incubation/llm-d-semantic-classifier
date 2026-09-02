@@ -452,7 +452,22 @@ impl ClassifyServer {
         let incoming = tokio_stream::StreamExt::map(
             tokio_stream::wrappers::TcpListenerStream::new(listener),
             move |conn| {
-                if conn.is_ok() {
+                if let Ok(ref stream) = conn {
+                    // Disable Nagle on every ACCEPTED connection.
+                    //
+                    // `Server::builder().tcp_nodelay(..)` only applies when tonic
+                    // owns the listener; with `serve_with_incoming` (used here so
+                    // accepted connections can be counted for I-008) tonic never
+                    // touches the socket, so accepted sockets keep Nagle on.
+                    //
+                    // The symptom is unmistakable and expensive: a small fraction
+                    // of responses stall on the peer's 40 ms delayed-ACK timer, so
+                    // the latency distribution is bimodal -- ~0.28 ms for most
+                    // requests and a hard cluster at 40-42 ms with essentially
+                    // nothing in between. That tail alone set p99 for the whole
+                    // service. `ClassifyClient::connect` already sets nodelay on
+                    // the client side; this is the missing server half.
+                    let _ = stream.set_nodelay(true);
                     accept_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
                 conn
