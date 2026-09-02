@@ -32,7 +32,7 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | U-035 | shutdown stops admission and drains configured in-flight work | 0.20 |
 | U-036 | one runtime error cannot poison unrelated requests | 0.20 |
 | U-040 | exact cache hit bypasses tokenizer and runtime | 0.1 |
-| U-041 | identical concurrent misses coalesce/bound duplicate forwards | 0.1 |
+| U-041 | identical concurrent misses coalesce/bound duplicate forwards; coalesced waiters counted as `cache_coalesced` | 0.1 |
 | U-042 | cache key changes with model/classifier revision | 0.1 |
 | U-043 | cache key changes with tokenizer revision | 0.1 |
 | U-044 | cache key changes with taxonomy/prototype revision | 0.1 |
@@ -56,7 +56,7 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | U-072 | per-classifier deadline/config honored | 0.23 |
 | U-073 | multi-signal result ordering deterministic | 0.23 |
 | U-080 | queue/tokenize/forward/total metrics emitted | 0.1 |
-| U-081 | cache hit/miss counters correct | 0.1 |
+| U-081 | cache hit/miss/coalesced counters correct | 0.1 |
 | U-082 | metric labels bounded | 0.20 |
 | U-083 | session_id is never metric label | 0.20 |
 | U-084 | request_id cannot create metric cardinality | 0.20 |

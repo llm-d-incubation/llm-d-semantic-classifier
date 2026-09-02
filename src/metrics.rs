@@ -145,6 +145,9 @@ pub struct MetricsSnapshot {
     pub l2_misses: u64,
     /// Number of L2 degraded responses.
     pub l2_degraded: u64,
+    /// Number of classification requests that waited for another thread's
+    /// in-flight forward (single-flight coalesced, AC-007).
+    pub cache_coalesced: u64,
 }
 
 /// The shared latency/counter registry behind the metrics surface.
@@ -168,6 +171,7 @@ struct Inner {
     l2_hits: u64,
     l2_misses: u64,
     l2_degraded: u64,
+    cache_coalesced: u64,
     hist_queue: Histogram,
     hist_tokenize: Histogram,
     hist_forward: Histogram,
@@ -242,6 +246,13 @@ impl Metrics {
         self.inner.lock().unwrap().l2_degraded += 1;
     }
 
+    /// Record one classification that waited for another thread's in-flight
+    /// forward (single-flight coalesced, AC-007). Previously counted as a
+    /// cache hit, but with miss-class latency.
+    pub fn record_cache_coalesced(&self) {
+        self.inner.lock().unwrap().cache_coalesced += 1;
+    }
+
     /// An immutable snapshot of the accumulated latency decomposition.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let inner = self.inner.lock().unwrap();
@@ -255,6 +266,7 @@ impl Metrics {
             l2_hits: inner.l2_hits,
             l2_misses: inner.l2_misses,
             l2_degraded: inner.l2_degraded,
+            cache_coalesced: inner.cache_coalesced,
         }
     }
 }
@@ -390,19 +402,26 @@ mod tests {
         assert!(snap.forward <= snap.total);
     }
 
-    /// U-081 (AC-012): cache hit/miss counters are counted independently and
-    /// partition every request exactly.
+    /// U-081 (AC-012): cache hit/miss/coalesced counters are counted
+    /// independently and partition every request exactly.
     #[test]
     fn u081_cache_hit_miss_counters_partition() {
         let metrics = Metrics::new();
         metrics.record_cache_hit();
         metrics.record_cache_hit();
         metrics.record_cache_miss();
+        metrics.record_cache_coalesced();
+        metrics.record_cache_coalesced();
+        metrics.record_cache_coalesced();
 
         let snap = metrics.snapshot();
         assert_eq!(snap.cache_hits, 2);
         assert_eq!(snap.cache_misses, 1);
-        assert_eq!(snap.cache_hits + snap.cache_misses, 3);
+        assert_eq!(snap.cache_coalesced, 3);
+        assert_eq!(
+            snap.cache_hits + snap.cache_misses + snap.cache_coalesced,
+            6
+        );
     }
 
     /// L2 counters increment independently.

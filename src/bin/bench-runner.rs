@@ -265,6 +265,7 @@ fn stage_delta(before: MetricsSnapshot, after: MetricsSnapshot) -> MetricsSnapsh
         l2_hits: after.l2_hits.saturating_sub(before.l2_hits),
         l2_misses: after.l2_misses.saturating_sub(before.l2_misses),
         l2_degraded: after.l2_degraded.saturating_sub(before.l2_degraded),
+        cache_coalesced: after.cache_coalesced.saturating_sub(before.cache_coalesced),
     }
 }
 

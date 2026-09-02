@@ -52,25 +52,28 @@ fn u080_queue_tokenize_forward_total_metrics_emitted() {
     assert!(snap.forward <= snap.total);
 }
 
-/// U-081 (AC-012): cache hit/miss counters are correct.
+/// U-081 (AC-012): cache hit/miss/coalesced counters partition every request.
 ///
-/// The metrics registry must count cache hits and misses independently and
-/// exactly. A hit increments the hit counter, a miss increments the miss
-/// counter; neither leaks across the other.
+/// The metrics registry must count cache hits, misses, and coalesced waits
+/// independently and exactly. The three counters partition every request.
+/// (The full three-way partition is exercised in src/metrics.rs unit tests
+/// and in tests/metrics_accuracy.rs with concurrent workloads.)
 #[test]
-fn u081_cache_hit_miss_counters_correct() {
+fn u081_cache_hit_miss_coalesced_counters_correct() {
     let metrics = Metrics::new();
     metrics.record_cache_hit();
     metrics.record_cache_hit();
     metrics.record_cache_miss();
+    metrics.record_cache_coalesced();
 
     let snap: MetricsSnapshot = metrics.snapshot();
     assert_eq!(snap.cache_hits, 2, "two hits must be counted");
     assert_eq!(snap.cache_misses, 1, "one miss must be counted");
+    assert_eq!(snap.cache_coalesced, 1, "one coalesced must be counted");
     assert_eq!(
-        snap.cache_hits + snap.cache_misses,
-        3,
-        "hit + miss counters must partition every request"
+        snap.cache_hits + snap.cache_misses + snap.cache_coalesced,
+        4,
+        "hit + miss + coalesced counters must partition every request"
     );
 }
 

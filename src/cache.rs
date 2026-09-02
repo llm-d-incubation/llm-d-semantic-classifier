@@ -40,6 +40,27 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use crate::classify::{ClassificationResult, ClassifyError, Embedding};
 
+/// The path a request took through the cache pipeline.
+///
+/// A cache interaction has three possible outcomes, each with distinct
+/// latency characteristics (AC-006/AC-007):
+///   - `Hit`:       result was already cached (~microseconds)
+///   - `Miss`:      ran the forward closure (tokenize + embed + rank)
+///   - `Coalesced`: waited for another thread's in-flight forward
+///
+/// The distinction matters for metrics accuracy: a coalesced wait
+/// experiences miss-class latency but was previously counted as a hit
+/// because no forward closure ran on that thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CachePath {
+    /// Served from the exact-result cache (no forward, no wait).
+    Hit,
+    /// Ran the forward closure (designated single-flight forwarder).
+    Miss,
+    /// Waited for another thread's in-flight forward result.
+    Coalesced,
+}
+
 /// A versioned fingerprint cache key (design.md).
 ///
 /// The key is a 32-byte blake3 fingerprint over classifier/model/tokenizer/
@@ -285,24 +306,26 @@ impl SharedCache {
         }
     }
 
-    /// Classify `key` concurrently, returning the classification result.
+    /// Classify `key` concurrently, returning the classification result and
+    /// the [`CachePath`] that produced it.
     ///
-    /// Serves an already-cached result on the fast path. On a miss, the FIRST
-    /// caller for `key` runs the forward closure once (single-flight); every
-    /// other identical concurrent miss waits for and reads that shared result
-    /// instead of running its own forward. This bounds identical concurrent
+    /// Serves an already-cached result on the fast path (`CachePath::Hit`).
+    /// On a miss, the FIRST caller for `key` runs the forward closure once
+    /// (single-flight, `CachePath::Miss`); every other identical concurrent
+    /// miss waits for and reads that shared result instead of running its own
+    /// forward (`CachePath::Coalesced`). This bounds identical concurrent
     /// misses to ONE forward per distinct key (AC-007). A failed forward is
     /// propagated to every caller and is NOT cached.
     pub fn classify_concurrent(
         &self,
         key: CacheKey,
         forward: impl FnOnce() -> Result<ClassificationResult, ClassifyError>,
-    ) -> Result<ClassificationResult, ClassifyError> {
+    ) -> (Result<ClassificationResult, ClassifyError>, CachePath) {
         // Fast path: serve an already-cached result.
         {
             let inner = self.inner.lock().unwrap();
             if let Some(cached) = inner.cached_value(&key) {
-                return Ok(cached);
+                return (Ok(cached), CachePath::Hit);
             }
         }
         // Single-flight: if another thread is already forwarding this key, wait
@@ -326,7 +349,7 @@ impl SharedCache {
             while result.is_none() {
                 result = slot.condvar.wait(result).unwrap();
             }
-            return result.clone().unwrap();
+            return (result.clone().unwrap(), CachePath::Coalesced);
         }
         // We are the designated forwarder: run the forward exactly once.
         let result = forward();
@@ -343,7 +366,7 @@ impl SharedCache {
         *result_guard = Some(result.clone());
         drop(result_guard);
         slot.condvar.notify_all();
-        result
+        (result, CachePath::Miss)
     }
 
     /// Number of times the tokenizer/model forward was invoked (all threads).
@@ -466,7 +489,7 @@ mod bounded_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheKey, ExactCache, SharedCache};
+    use super::{CacheKey, CachePath, ExactCache, SharedCache};
     use crate::classify::{ClassificationResult, ClassifyError, ClassifyStatus, RankedSignal};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -661,7 +684,7 @@ mod tests {
             }));
         }
 
-        let results: Vec<Result<ClassificationResult, ClassifyError>> =
+        let results: Vec<(Result<ClassificationResult, ClassifyError>, CachePath)> =
             handles.into_iter().map(|h| h.join().unwrap()).collect();
 
         assert_eq!(
@@ -673,9 +696,24 @@ mod tests {
         assert!(
             results
                 .iter()
-                .all(|r| matches!(r, Ok(c) if c.ranked.first().map(|s| s.id.as_str()) == Some("sensitivity"))),
+                .all(|r| matches!(&r.0, Ok(c) if c.ranked.first().map(|s| s.id.as_str()) == Some("sensitivity"))),
             "every concurrent caller must receive the same classification result"
         );
+        // Exactly one caller should be the designated forwarder (Miss), the
+        // rest waited for its result (Coalesced). None are Hits (cold cache).
+        let misses = results.iter().filter(|r| r.1 == CachePath::Miss).count();
+        let coalesced = results
+            .iter()
+            .filter(|r| r.1 == CachePath::Coalesced)
+            .count();
+        let hits = results.iter().filter(|r| r.1 == CachePath::Hit).count();
+        assert_eq!(misses, 1, "exactly one designated forwarder");
+        assert_eq!(
+            coalesced,
+            CONCURRENCY - 1,
+            "all other callers must be coalesced waits"
+        );
+        assert_eq!(hits, 0, "no true cache hits on a cold cache");
     }
 }
 

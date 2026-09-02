@@ -23,10 +23,12 @@
 //! [`ClassificationResult`], keyed by a blake3 versioned fingerprint.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::cache::{identity_tag, CacheKey, NoopSemanticCache, SemanticCache, SharedCache};
+use crate::cache::{
+    identity_tag, CacheKey, CachePath, NoopSemanticCache, SemanticCache, SharedCache,
+};
 use crate::metrics::{LatencyStage, Metrics};
 use crate::ranker::{anchor_rank, cosine_rank, AnchorSet, Prototype};
 use crate::taxonomy::ClassifierDefinition;
@@ -349,15 +351,9 @@ where
         // blake3 key, so a revision bump can never serve a stale semantic label.
         let tag = identity_tag(meta.cache_identity());
         let metrics = self.metrics.clone();
-        // A miss runs the raw backend forward on the designated single-flight
-        // caller; a hit bypasses it entirely (AC-006). The flag distinguishes the
-        // two so the hit/miss counters partition every request.
-        let forward_ran = Arc::new(AtomicBool::new(false));
         let forward = {
             let runtime = self.runtime.clone();
             let semantic = self.semantic.clone();
-            let metrics = metrics.clone();
-            let forward_ran = forward_ran.clone();
             let tag = tag.clone();
             let input = ClassificationInput {
                 text: normalized,
@@ -365,11 +361,10 @@ where
                 session_metadata: input.session_metadata,
             };
             move || {
-                forward_ran.store(true, Ordering::SeqCst);
-                let _ = &metrics;
                 // Embed once. Reused by both the L2 lookup and the ranker.
                 let embedding = runtime.embed(&input)?;
-                // L2 semantic lookup (fail-open: None on any trouble).
+                // L2 semantic lookup (fail-open: None on any trouble). L2
+                // hit/miss/degraded metrics are recorded inside the cache.
                 if let Some(hit) = semantic.lookup(&embedding, &tag) {
                     return Ok(hit);
                 }
@@ -379,12 +374,11 @@ where
                 Ok(result)
             }
         };
-        let result = self.cache.classify_concurrent(key, forward);
-        // Classify the request as a cache hit or miss and expose the counters.
-        if forward_ran.load(Ordering::SeqCst) {
-            metrics.record_cache_miss();
-        } else {
-            metrics.record_cache_hit();
+        let (result, path) = self.cache.classify_concurrent(key, forward);
+        match path {
+            CachePath::Hit => metrics.record_cache_hit(),
+            CachePath::Miss => metrics.record_cache_miss(),
+            CachePath::Coalesced => metrics.record_cache_coalesced(),
         }
         // Queue and Total are deliberately NOT recorded here. The executor owns
         // Queue (it is the only component that knows how long a job waited), and
