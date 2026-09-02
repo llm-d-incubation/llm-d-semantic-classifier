@@ -1,0 +1,60 @@
+# Round-2 base gateway config.
+#
+# UNIFORM-FAST variant: every cluster points at the 0 ms backend.
+#
+# Used for arms that measure GATEWAY capacity. With latency-separated tiers the
+# classified path is pinned to the slow backend, so the ladder measures the
+# simulated model rather than Praxis -- throughput collapses to concurrency /
+# backend_latency and the gateway is never stressed. Holding the destination
+# constant also keeps the classified-vs-control delta attributable purely to
+# the classification work.
+#
+# :8080 ai-routing  (llm_d_sc selects the cluster)
+# :8081 baseline    (a static router selects it) -- identical otherwise, so the
+#                   delta between the two is the cost of deciding semantically.
+admin:
+  address: "0.0.0.0:9901"
+  verbose: true
+insecure_options:
+  allow_public_admin: true
+listeners:
+  - name: http
+    address: "0.0.0.0:8080"
+    filter_chains: [ai-routing]
+  - name: baseline
+    address: "0.0.0.0:8081"
+    filter_chains: [baseline]
+filter_chains:
+  - name: ai-routing
+    filters:
+      - filter: request_id
+      - filter: access_log
+      - filter: llm_d_sc
+        endpoint: "llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+        default_cluster: general
+        timeout_ms: 1000
+        routes:
+          - {label: SIMPLE,    cluster: small}
+          - {label: MEDIUM,    cluster: small}
+          - {label: COMPLEX,   cluster: large}
+          - {label: REASONING, cluster: large}
+      - filter: load_balancer
+        clusters:
+          - name: small
+            endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
+          - name: large
+            endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
+          - name: general
+            endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
+  - name: baseline
+    filters:
+      - filter: request_id
+      - filter: access_log
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: general
+      - filter: load_balancer
+        clusters:
+          - name: general
+            endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
