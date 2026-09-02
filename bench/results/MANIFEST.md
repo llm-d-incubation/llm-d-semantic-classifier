@@ -14,13 +14,14 @@ Methodology rule 5: every result carries a manifest. This is it.
 | taxonomies | complexity (4 labels / 48 anchors), cost (4/40), sensitivity (5/50), plus synthetic 48/200/800/2000-anchor variants |
 | Praxis | 0.5.2 vendored snapshot + `llm-d-sc-praxis-filter` (branch `poc/phase-a-external`) |
 | endpoints | vllm-vcr `d01e542e72b6ed2dd29a4ee0fd771dce7e9a5d11` + vLLM Rust frontend `vllm-project/vllm@6e448d0` |
+| llm-d gateway | Istio GatewayClass + InferencePool + EPP `ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0`, same vllm-vcr backends |
 | Redis | `redis/redis-stack-server:7.4.0-v1` (RediSearch `search` module present) |
 | target node | `gf41fb2` (128 vCPU, amd64, Ubuntu 24.04) |
 | driver node | `gd91fda` (128 vCPU) — always a DIFFERENT node than targets |
 | gateway node | `gf48cf2` · endpoints node | `gf49e9c` |
 | driver | `scbench` (this repo, `bench/driver`), closed-loop |
 | percentiles | nearest-rank, identical to `src/bench.rs::percentile` |
-| runs captured | 181 |
+| runs captured | 269 |
 
 ## Raw data
 

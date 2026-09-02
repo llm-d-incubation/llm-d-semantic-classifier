@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "p5-praxis1-classified",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 256,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "hit_ratio": 1.0,
+  "keyspace": 1,
+  "run_id": 81982,
+  "warmup_requests": 2000,
+  "measured_requests": 750214,
+  "wall_secs": 20.000552722,
+  "throughput_rps": 37509.66337919189,
+  "throughput_rpm": 2250579.802751513,
+  "offered_concurrency": 256,
+  "implied_mean_ms": 6.824907955372734,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 750214
+  },
+  "latency": {
+    "count": 750214,
+    "min_ms": 1.117731,
+    "mean_ms": 6.824573113567595,
+    "stddev_ms": 1.9045560142798545,
+    "p50_ms": 6.667225,
+    "p90_ms": 9.016215,
+    "p95_ms": 9.817547,
+    "p99_ms": 12.131708,
+    "p999_ms": 20.324453,
+    "max_ms": 38.838746
+  },
+  "started_unix": 1788381983
+}

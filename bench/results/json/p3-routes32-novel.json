@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "p3-routes32-novel",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 16,
+  "connections": 16,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 1.0,
+  "keyspace": 1,
+  "run_id": 81423,
+  "warmup_requests": 2000,
+  "measured_requests": 2867,
+  "wall_secs": 25.0015595,
+  "throughput_rps": 114.67284670782237,
+  "throughput_rpm": 6880.370802469342,
+  "offered_concurrency": 16,
+  "implied_mean_ms": 139.52736379490756,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 2867
+  },
+  "latency": {
+    "count": 2867,
+    "min_ms": 106.383959,
+    "mean_ms": 139.5771194705267,
+    "stddev_ms": 17.954453530176156,
+    "p50_ms": 134.501138,
+    "p90_ms": 163.625045,
+    "p95_ms": 168.944504,
+    "p99_ms": 191.644138,
+    "p999_ms": 214.871897,
+    "max_ms": 218.708376
+  },
+  "started_unix": 1788381441
+}

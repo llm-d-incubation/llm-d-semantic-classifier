@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "p2-novel-ctx004096",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 16,
+  "connections": 16,
+  "context_bytes": 4096,
+  "cache_mode": "miss",
+  "hit_ratio": 1.0,
+  "keyspace": 1,
+  "run_id": 80716,
+  "warmup_requests": 2000,
+  "measured_requests": 954,
+  "wall_secs": 25.001242769,
+  "throughput_rps": 38.15810313169317,
+  "throughput_rpm": 2289.48618790159,
+  "offered_concurrency": 16,
+  "implied_mean_ms": 419.30805482599584,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 954
+  },
+  "latency": {
+    "count": 954,
+    "min_ms": 298.297102,
+    "mean_ms": 418.9489150230608,
+    "stddev_ms": 27.147204932852926,
+    "p50_ms": 416.153357,
+    "p90_ms": 457.093552,
+    "p95_ms": 467.290522,
+    "p99_ms": 490.250883,
+    "p999_ms": 506.58036,
+    "max_ms": 506.58036
+  },
+  "started_unix": 1788380769
+}
