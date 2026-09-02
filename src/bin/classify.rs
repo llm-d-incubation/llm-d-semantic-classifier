@@ -121,6 +121,7 @@ fn main() {
             text: text.clone(),
             requested_signals: vec![definition.signal.clone()],
             session_metadata: Default::default(),
+            context_completeness: Default::default(),
         });
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         match result {

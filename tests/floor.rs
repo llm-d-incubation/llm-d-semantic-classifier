@@ -30,6 +30,7 @@ fn inference_floor_by_length() {
             text: text.clone(),
             requested_signals: Vec::new(),
             session_metadata: HashMap::new(),
+            context_completeness: Default::default(),
         };
         for _ in 0..20 {
             let _ = clf.classify(inp.clone());

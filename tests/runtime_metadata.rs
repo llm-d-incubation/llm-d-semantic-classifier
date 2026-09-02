@@ -134,6 +134,7 @@ fn i095_grpc_validates_requested_signal_against_the_loaded_runtime() {
         session_id: "sess".into(),
         context: "What is the capital of Peru?".into(),
         signals,
+        context_completeness: Default::default(),
     };
 
     // The signal this instance actually serves is accepted.

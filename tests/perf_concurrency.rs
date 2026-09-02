@@ -39,6 +39,7 @@ fn input(text: &str) -> ClassificationInput {
         text: text.to_string(),
         requested_signals: Vec::new(),
         session_metadata: Default::default(),
+        context_completeness: Default::default(),
     }
 }
 
@@ -243,6 +244,7 @@ fn p002_grpc_localhost_cache_hit() {
         session_id: "sess-p002".to_string(),
         context: "a stable prompt served repeatedly from the cache".to_string(),
         signals: Vec::new(),
+        context_completeness: Default::default(),
     };
 
     let t0 = Instant::now();

@@ -88,6 +88,7 @@ fn request(i: usize) -> generated::ClassifyRequest {
         session_id: "sess-sat".to_string(),
         context: format!("unique saturation context {i}"),
         signals: vec!["sensitivity".to_string()],
+        context_completeness: generated::ContextCompleteness::Full as i32,
     }
 }
 
@@ -193,6 +194,7 @@ async fn i035_saturation_rejects_rather_than_runaway_queueing() {
             session_id: "sess-recovery".to_string(),
             context: "post-saturation recovery request".to_string(),
             signals: vec!["sensitivity".to_string()],
+            context_completeness: Default::default(),
         })
         .await
         .expect("service must recover after load stops");

@@ -27,6 +27,7 @@ fn concurrency_scaling() {
         text: text.clone(),
         requested_signals: Vec::new(),
         session_metadata: HashMap::new(),
+        context_completeness: Default::default(),
     };
     for _ in 0..20 {
         let _ = clf.classify(mk());
@@ -53,6 +54,7 @@ fn concurrency_scaling() {
                             text: t.clone(),
                             requested_signals: Vec::new(),
                             session_metadata: HashMap::new(),
+                            context_completeness: Default::default(),
                         };
                         let s = Instant::now();
                         c.classify(i).expect("classify must succeed");

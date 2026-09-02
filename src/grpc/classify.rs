@@ -204,6 +204,19 @@ where
             text: req.context,
             requested_signals: req.signals,
             session_metadata: HashMap::from([("session_id".to_string(), req.session_id)]),
+            context_completeness: match generated::ContextCompleteness::try_from(
+                req.context_completeness,
+            )
+            .unwrap_or(generated::ContextCompleteness::Unspecified)
+            {
+                generated::ContextCompleteness::Full => crate::classify::ContextCompleteness::Full,
+                generated::ContextCompleteness::Delta => {
+                    crate::classify::ContextCompleteness::Delta
+                }
+                generated::ContextCompleteness::Unspecified => {
+                    crate::classify::ContextCompleteness::Unspecified
+                }
+            },
         };
         // AC-008 / ADR-0002: hand the job to the dedicated inference executor
         // over a BOUNDED handoff. The model forward does NOT run on this Tokio

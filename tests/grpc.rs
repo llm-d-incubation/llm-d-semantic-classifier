@@ -30,6 +30,7 @@ fn fixture_request(request_id: &str, session_id: &str) -> ClassifyRequest {
         session_id: session_id.to_string(),
         context: "this is a golden sensitivity input".to_string(),
         signals: Vec::new(),
+        context_completeness: generated::ContextCompleteness::Full as i32,
     }
 }
 

@@ -62,6 +62,23 @@ pub struct ClassificationInput {
     pub text: String,
     pub requested_signals: Vec<String>,
     pub session_metadata: HashMap<String, String>,
+    pub context_completeness: ContextCompleteness,
+}
+
+/// Whether the caller supplied complete semantic context or only a follow-up.
+///
+/// The gateway is authoritative for assembling conversation context. This
+/// marker lets the classifier decline a delta-only request safely without
+/// retaining durable session state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContextCompleteness {
+    /// Legacy callers do not declare completeness; preserve existing behavior.
+    #[default]
+    Unspecified,
+    /// The supplied text contains complete context and can be classified.
+    Full,
+    /// The supplied text is only a follow-up and needs prior context.
+    Delta,
 }
 
 /// A classifier-produced embedding: the L2-normalized vector the ranker and the
@@ -226,6 +243,22 @@ impl RuntimeMetadata {
     }
 }
 
+/// Build a provenance-preserving abstention without invoking a runtime backend.
+///
+/// A delta-only follow-up is not sufficient semantic input after disposable
+/// cache/session state is lost. The gateway must supply full context before the
+/// classifier can produce ranked evidence.
+fn insufficient_context_abstention(meta: RuntimeMetadata) -> ClassificationResult {
+    ClassificationResult {
+        classifier_id: meta.classifier_id,
+        model_revision: meta.model_revision,
+        tokenizer_revision: meta.tokenizer_revision,
+        taxonomy_revision: meta.taxonomy_revision,
+        status: ClassifyStatus::Abstain,
+        ranked: Vec::new(),
+    }
+}
+
 /// A generic classification service core shared by EVERY backend.
 ///
 /// Wraps any [`ClassifierRuntime`] backend (`R`) and centralizes the exact-result
@@ -333,6 +366,13 @@ where
     /// versioned fingerprint, and the hit/miss/total/queue metrics are recorded
     /// here so EVERY backend inherits them.
     fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
+        // A delta-only follow-up cannot be safely classified in isolation. This
+        // check deliberately precedes normalization, cache lookup, and raw
+        // runtime work: an exact-result/session cache is disposable acceleration,
+        // never authoritative conversation state.
+        if input.context_completeness == ContextCompleteness::Delta {
+            return Ok(insufficient_context_abstention(self.runtime.metadata()));
+        }
         let normalized = input.text.trim().to_string();
         // Key on the identity the WRAPPED RUNTIME reports, not on module
         // constants. Keying on constants meant every backend shared one
@@ -359,6 +399,7 @@ where
                 text: normalized,
                 requested_signals: input.requested_signals,
                 session_metadata: input.session_metadata,
+                context_completeness: input.context_completeness,
             };
             move || {
                 // Embed once. Reused by both the L2 lookup and the ranker.
@@ -698,6 +739,7 @@ pub fn load_and_warm_modelcar<P: AsRef<std::path::Path>>(
         text: WARMUP_INPUT.to_string(),
         requested_signals: vec!["sensitivity".to_string()],
         session_metadata: HashMap::new(),
+        context_completeness: ContextCompleteness::Full,
     };
     classifier
         .classify(warmup_input)
@@ -886,6 +928,7 @@ mod tests {
             text: "this is a golden sensitivity input".to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::from([("session_id".to_string(), "sess-0001".to_string())]),
+            context_completeness: ContextCompleteness::Full,
         };
         let result = service.classify(input).expect("golden input must classify");
         assert_eq!(result.status, ClassifyStatus::Ok);
@@ -919,12 +962,58 @@ mod tests {
             text: "this is a golden sensitivity input".to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::new(),
+            context_completeness: ContextCompleteness::Full,
         };
         let first = core.classify(input.clone()).expect("first classify");
         let second = core.classify(input).expect("second classify");
         assert_eq!(
             first, second,
             "identical inputs must produce identical results"
+        );
+    }
+
+    /// U-048: a delta-only follow-up must not be classified as standalone
+    /// context. It abstains before interacting with the exact-result cache or
+    /// invoking the raw classifier.
+    #[test]
+    fn u048_delta_context_abstains_without_forward_or_cache_access() {
+        let metrics = Metrics::new();
+        let core =
+            ServiceCore::with_metrics(ClassifyService::from_synthetic_fixtures(), metrics.clone());
+        let result = core
+            .classify(ClassificationInput {
+                text: "do that again".to_string(),
+                requested_signals: vec!["sensitivity".to_string()],
+                session_metadata: HashMap::from([(
+                    "session_id".to_string(),
+                    "sess-delta".to_string(),
+                )]),
+                context_completeness: ContextCompleteness::Delta,
+            })
+            .expect("delta context must return a typed abstention");
+
+        assert_eq!(result.status, ClassifyStatus::Abstain);
+        assert!(
+            result.ranked.is_empty(),
+            "abstention must not fabricate a label"
+        );
+        assert_eq!(
+            core.forward_count(),
+            0,
+            "delta context must not invoke a raw forward"
+        );
+        let snapshot = metrics.snapshot();
+        assert_eq!(
+            snapshot.cache_hits, 0,
+            "delta context must not read the cache"
+        );
+        assert_eq!(
+            snapshot.cache_misses, 0,
+            "delta context must not populate the cache"
+        );
+        assert_eq!(
+            snapshot.cache_coalesced, 0,
+            "delta context must not join a cache flight"
         );
     }
 
@@ -947,6 +1036,7 @@ mod tests {
             text: "this is a golden sensitivity input".to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::new(),
+            context_completeness: ContextCompleteness::Full,
         };
         let result = classifier
             .classify(input)
@@ -986,6 +1076,7 @@ mod tests {
             text: WARMUP_INPUT.to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::new(),
+            context_completeness: ContextCompleteness::Full,
         };
 
         // Miss: exactly one tokenizer call and one model forward.
@@ -1022,6 +1113,7 @@ mod tests {
             text: "a distinct sensitivity context for a fresh miss".to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::new(),
+            context_completeness: ContextCompleteness::Full,
         };
         core.classify(other).expect("distinct input must classify");
         assert_eq!(
@@ -1108,6 +1200,7 @@ mod tests {
             text: "some novel prompt not seen before".to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::new(),
+            context_completeness: ContextCompleteness::Full,
         };
         let out = core.classify(input).expect("classify");
         assert_eq!(
@@ -1132,6 +1225,7 @@ mod tests {
             text: "this is a golden sensitivity input".to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::new(),
+            context_completeness: ContextCompleteness::Full,
         };
         let via_core = core.classify(input.clone()).expect("core classify");
         let direct = ClassifyService::from_synthetic_fixtures()
@@ -1153,6 +1247,7 @@ mod tests {
             text: "this is a golden sensitivity input".to_string(),
             requested_signals: vec!["sensitivity".to_string()],
             session_metadata: HashMap::new(),
+            context_completeness: ContextCompleteness::Full,
         };
         // Two-stage path.
         let embedding = svc.embed(&input).expect("embed");
