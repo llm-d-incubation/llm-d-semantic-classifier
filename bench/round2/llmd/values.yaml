@@ -1,0 +1,46 @@
+# llm-d Router (Envoy + EPP) in front of the SAME vllm-vcr backends Praxis uses.
+#
+# Holding the backends constant is the whole point: it makes "Praxis vs llm-d"
+# a gateway comparison rather than a comparison of two different stacks.
+#
+# The vendored guide values assume a prefill/decode-disaggregated pool. Ours is a
+# flat pool of identical model servers, so the P/D decider and prefill/decode
+# filters are dropped and a single scheduling profile is used -- otherwise the
+# prefill-filter would match nothing and the pool would appear empty.
+router:
+  epp:
+    replicas: 1
+    image:
+      registry: ghcr.io/llm-d
+      repository: llm-d-router-endpoint-picker-dev
+      tag: main
+      pullPolicy: IfNotPresent
+    pluginsConfigFile: "flat-config.yaml"
+    pluginsCustomConfig:
+      flat-config.yaml: |
+        apiVersion: llm-d.ai/v1alpha1
+        kind: EndpointPickerConfig
+        plugins:
+        - type: queue-scorer
+        - type: prefix-cache-scorer
+        - type: active-request-scorer
+        schedulingProfiles:
+        - name: default
+          plugins:
+          - pluginRef: queue-scorer
+            weight: 2
+          - pluginRef: prefix-cache-scorer
+            weight: 3
+          - pluginRef: active-request-scorer
+            weight: 2
+    resources:
+      requests: {cpu: "4", memory: 8Gi}
+      limits: {memory: 16Gi}
+
+  inferencePool:
+    failureMode: "FailOpen"
+
+  modelServers:
+    protocol: http
+    matchLabels:
+      llmd-bench-pool: "vcr"

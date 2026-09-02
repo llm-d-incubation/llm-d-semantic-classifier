@@ -1,0 +1,171 @@
+# llm-d inference gateway (Istio Gateway -> InferencePool -> EPP) in front of the
+# SAME vllm-vcr backends that Praxis uses.
+#
+# Holding the backends constant is what makes "Praxis vs llm-d" a GATEWAY
+# comparison rather than a comparison of two unrelated stacks.
+#
+# The EPP image and Istio GatewayClass here are both already in use elsewhere on
+# this cluster, so they are known-pullable and known-programmable.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: llmd-bench-epp, namespace: cnuland-dev}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: llmd-bench-epp}
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, endpoints, namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  # The EPP watches BOTH the upstream inference.networking groups and llm-d's
+  # own llm-d.ai group (InferenceObjective). Omitting the latter leaves the pool
+  # stuck at "Pool is not initialized" with the real cause buried in a watch
+  # error rather than surfaced as a readiness failure.
+  - apiGroups: ["inference.networking.k8s.io", "inference.networking.x-k8s.io", "llm-d.ai"]
+    resources: ["*"]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: [tokenreviews]
+    verbs: [create]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: [subjectaccessreviews]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: llmd-bench-epp}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: llmd-bench-epp}
+subjects:
+  - {kind: ServiceAccount, name: llmd-bench-epp, namespace: cnuland-dev}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: llmd-bench-epp-plugins, namespace: cnuland-dev}
+data:
+  plugins.yaml: |
+    apiVersion: llm-d.ai/v1alpha1
+    kind: EndpointPickerConfig
+    plugins:
+    - type: queue-scorer
+    - type: prefix-cache-scorer
+    - type: active-request-scorer
+    schedulingProfiles:
+    - name: default
+      plugins:
+      - pluginRef: queue-scorer
+        weight: 2
+      - pluginRef: prefix-cache-scorer
+        weight: 3
+      - pluginRef: active-request-scorer
+        weight: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmd-bench-epp
+  namespace: cnuland-dev
+  labels: {app: llmd-bench-epp, component: llmd}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: llmd-bench-epp}}
+  template:
+    metadata:
+      labels: {app: llmd-bench-epp, component: llmd}
+    spec:
+      serviceAccountName: llmd-bench-epp
+      nodeSelector: {kubernetes.io/hostname: gf48cf2}
+      containers:
+        - name: epp
+          image: ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0
+          args:
+            - --pool-name=llmd-bench-pool
+            - --pool-namespace=cnuland-dev
+            - --pool-group=inference.networking.k8s.io
+            - --zap-encoder=json
+            - --config-file=/config/plugins.yaml
+            - --grpc-health-port=9003
+            - --v=2
+            - --tracing=false
+          env:
+            - {name: NAMESPACE, valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}
+            - {name: POD_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+          ports:
+            - {containerPort: 9002, name: grpc}
+            - {containerPort: 9003, name: grpc-health}
+            - {containerPort: 9090, name: metrics}
+          volumeMounts: [{name: plugins, mountPath: /config}]
+          resources:
+            requests: {cpu: "4", memory: 8Gi}
+            limits: {cpu: "8", memory: 16Gi}
+      volumes:
+        - name: plugins
+          configMap: {name: llmd-bench-epp-plugins}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: llmd-bench-epp, namespace: cnuland-dev}
+spec:
+  selector: {app: llmd-bench-epp}
+  ports:
+    - {name: grpc, port: 9002, targetPort: 9002, appProtocol: http2}
+    - {name: grpc-health, port: 9003, targetPort: 9003}
+    - {name: metrics, port: 9090, targetPort: 9090}
+---
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata: {name: llmd-bench-pool, namespace: cnuland-dev}
+spec:
+  appProtocol: http
+  selector:
+    matchLabels:
+      llmd-bench-pool: "vcr"
+  targetPorts:
+    - number: 8000
+  endpointPickerRef:
+    group: ""
+    kind: Service
+    name: llmd-bench-epp
+    port: {number: 9002}
+    failureMode: FailOpen
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: {name: llmd-bench-gw, namespace: cnuland-dev}
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes: {namespaces: {from: Same}}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: llmd-bench-route, namespace: cnuland-dev}
+spec:
+  parentRefs: [{name: llmd-bench-gw}]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /}}]
+      backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: llmd-bench-pool
+          port: 8000
+---
+# Envoy reaches the EPP over TLS with a self-signed cert. Without this the
+# ext_proc call fails with gRPC 14 (upstream connect error) and every request
+# through the gateway returns 500 -- the failure surfaces in the Envoy log, not
+# in Gateway/HTTPRoute status, both of which stay green.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata: {name: llmd-bench-epp, namespace: cnuland-dev}
+spec:
+  host: llmd-bench-epp.cnuland-dev.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: SIMPLE
+      insecureSkipVerify: true
