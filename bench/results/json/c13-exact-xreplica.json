@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "label": "c13-exact-xreplica",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 128,
+  "connections": 64,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "hit_ratio": 0.9,
+  "keyspace": 2000,
+  "run_id": 74276,
+  "warmup_requests": 100,
+  "measured_requests": 28666089,
+  "wall_secs": 90.00085751,
+  "throughput_rps": 318509.0652810159,
+  "throughput_rpm": 19110543.916860953,
+  "offered_concurrency": 128,
+  "implied_mean_ms": 0.40187239219413573,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "COMPLEX": 27218456,
+    "MEDIUM": 974644,
+    "SIMPLE": 472989
+  },
+  "latency": {
+    "count": 28666089,
+    "min_ms": 0.091895,
+    "mean_ms": 0.39957947202560484,
+    "stddev_ms": 5.088977121809167,
+    "p50_ms": 0.281663,
+    "p90_ms": 0.431345,
+    "p95_ms": 0.480009,
+    "p99_ms": 0.575662,
+    "p999_ms": 0.862836,
+    "max_ms": 564.60102
+  },
+  "started_unix": 1788374277
+}

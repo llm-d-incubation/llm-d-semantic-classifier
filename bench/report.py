@@ -88,6 +88,35 @@ def main():
             if r5:
                 doc.append(table(r5, "taxonomy", lambda r: r["label"].split("-")[1],
                                  f"C5 — Route/taxonomy size ({m} path)"))
+    for pref, title, keyf, note in [
+        ("c1v2-", "C1v2 — Offered-load ladder, POST tcp_nodelay fix (1 replica, 4 workers, hit)",
+         lambda r: r["concurrency"], "Supersedes C1. The earlier ladder's retrograde region was measurement apparatus."),
+        ("c8-", "C8 — Hit-ratio sweep: exact vs redis-semantic across realistic mixes",
+         lambda r: r["label"].replace("c8-", ""),
+         "The operationally decisive curve. `hr` is the percentage of requests drawn from the warm keyspace."),
+        ("c9-", "C9 — Transport: ClusterIP vs direct Pod-IP fan-out (4 replicas)",
+         lambda r: r["label"].replace("c9-", ""),
+         "Tests whether the Service layer is a ceiling. It is not."),
+        ("c10-", "C10 — Connections held INDEPENDENT of concurrency (concurrency fixed at 256)",
+         lambda r: r["connections"],
+         "HTTP/2 multiplexing depth. A client-side tuning parameter, not a service property."),
+        ("c11-", "C11 — Praxis gateway saturation ladder (paired: classified vs static control)",
+         lambda r: r["label"].replace("c11-", ""),
+         "Both listeners are identical apart from cluster selection, so the delta is the cost of deciding semantically."),
+        ("c13-", "C13 — Cross-replica semantic cache (4 replicas, cold, 2000 keys)",
+         lambda r: r["label"].replace("c13-", ""), ""),
+        ("c12-", "C12 — Soak: 10 minutes sustained at 95% hit ratio",
+         lambda r: r["label"].replace("c12-", ""), ""),
+    ]:
+        rr = sel(rows, pref)
+        if rr:
+            doc.append(table(rr, "arm", keyf, title, note))
+    for pref, name in [("c2v2-", "C2v2 — Vertical scale POST-fix"), ("c3v2-", "C3v2 — Horizontal scale POST-fix")]:
+        for m in ("hit", "miss"):
+            rr = [r for r in sel(rows, pref) if r["cache_mode"] == m]
+            if rr:
+                doc.append(table(rr, "arm", lambda r: r["label"].split("-")[1],
+                                 f"{name} ({m} path)", ""))
     if sel(rows, "c7-"):
         for m in ("miss", "hit"):
             r7 = [r for r in sel(rows, "c7-") if r["cache_mode"] == m]

@@ -10,6 +10,62 @@ explains what they mean.
 
 ---
 
+## Corrections to the first pass
+
+House rule 8: corrections are published, not quietly replaced. Both datasets are
+retained — original arms under `c1/c2/c3`, corrected ones under `c1v2/c2v2/c3v2`.
+
+Continued benchmarking found a **bug in llm-d-sc itself** that was setting p99 for
+every cache-hit measurement, plus a bug in my own driver. Two headline conclusions
+from the first pass did not survive.
+
+**Root cause — Nagle was enabled on every accepted connection.**
+`Server::builder().tcp_nodelay(..)` only applies when tonic owns the listener. The
+server uses `serve_with_incoming` with its own `TcpListenerStream` (so accepted
+connections can be counted for I-008), so tonic never touched the socket. The
+client half was already correct. Histogramming the tail rather than reading
+percentiles made it unmistakable — over 200,000 requests:
+
+| Band | Requests | Share |
+|---|---:|---:|
+| < 5 ms | 196,342 | 98.17 % |
+| 5–35 ms | 4 | 0.00 % |
+| **40–42 ms** | **3,658** | **1.83 %** |
+
+Nothing occupies the gap. A hard cluster at exactly 40 ms is the peer's Linux
+delayed-ACK timer, not service latency — and that 1.83 % alone set p99 (~40.9 ms)
+for every hit arm. Fixed in `f57d4ef`; measured effect at concurrency 128:
+
+| | Before | After |
+|---|---:|---:|
+| Throughput | 117,728 req/s | **219,617 req/s** (+86 %) |
+| p99 | 40.872 ms | **1.225 ms** (33× better) |
+| 40–45 ms band | 3,658 samples | **0 samples** |
+
+**Correction 1 — vertical scaling does not peak at 8 workers and decline.**
+The apparent 41 % fall past 8 workers was the delayed-ACK tail. Hit-path
+throughput saturates at ~16 workers and then holds flat:
+
+| Workers | Before | After |
+|---:|---:|---:|
+| 8 | 148,875 | 160,073 |
+| 16 | 107,795 ↓ | **284,513** ↑ |
+| 32 | 87,896 ↓ | 287,957 |
+| 48 | — | 282,512 |
+
+**Correction 2 — there is no retrograde region on the offered-load ladder.**
+With Nagle disabled and a per-request global mutex removed from my driver, mean
+latency stays pinned at ~1.1 ms while throughput scales linearly (57k → 118k →
+226k at concurrency 64/128/256). A system whose latency does not rise with
+offered load is not saturated; the "knee at 64" was measurement apparatus.
+
+**Driver defects fixed** (they affected the numbers, so they are disclosed):
+*responses were never validated* — a transport-level `Ok` proves bytes came back,
+not that a classification happened. Re-validation showed all 200,000 responses
+returning `OK` with label `COMPLEX`, so the throughput was real work, but the
+check should have been there from the start (rule 3). And *status tallying held a
+global mutex per request*, making the driver itself the ceiling.
+
 ## Reading this as a network engineer
 
 llm-d-sc is a **request-scoped classification service on the data path**. Treat
@@ -66,21 +122,32 @@ Intel's Arena campaign found as a black box.
 `LLM_D_SC_CACHE`, `LLM_D_SC_REDIS_URL`. Operators cannot raise admission without
 a rebuild.
 
-### 1b. Throughput knee: offered concurrency 64 (cache-hit)
+### 1b. Concurrency: latency, not throughput, is what degrades
 
-| Concurrency | req/s | Δ vs previous | p50 | p99 |
+*(Corrected — the first pass reported a retrograde region past concurrency 64.
+That was measurement apparatus; see Corrections.)*
+
+Post-fix ladder, 1 replica, 4 workers, cache-hit:
+
+| Concurrency | req/s | p50 | p99 | errors |
 |---:|---:|---:|---:|---:|
-| 16 | 69,845 | +92 % | 0.183 ms | 0.356 ms |
-| 32 | 86,536 | +24 % | 0.253 ms | 0.620 ms |
-| **64** | **96,804** | +12 % | 0.474 ms | 1.085 ms |
-| 128 | 94,117 | **−3 %** | 1.007 ms | 19.121 ms |
-| 256 | 90,620 | −4 % | 1.977 ms | 23.806 ms |
+| 16 | 84,445 | 0.180 ms | 0.331 ms | 0 |
+| 32 | 103,874 | 0.240 ms | 0.552 ms | 0 |
+| 64 | 113,851 | 0.440 ms | 1.074 ms | 0 |
+| 128 | 107,259 | 0.923 ms | 19.740 ms | 0 |
+| 256 | 107,133 | 1.786 ms | 18.581 ms | 0 |
+| 384 | 113,430 | 2.572 ms | 24.446 ms | **14,980** |
+| 512 | 105,362 | 3.682 ms | 23.647 ms | 25,664 |
 
-Throughput scales ~90 % per doubling to concurrency 16, bends at 32, **peaks at
-64, then goes retrograde**. Past the peak you pay 2–9× latency for *less*
-throughput. p99 also inflects hard between 64 and 128 (1.09 ms → 19.12 ms).
+Throughput **plateaus** around 105–114 k req/s (at 4 workers) rather than
+collapsing. What degrades is latency: p50 rises roughly linearly with offered
+concurrency past 64, and p99 steps up an order of magnitude between 64 and 128.
 
-**Operating point: offered concurrency 32–64 per replica.**
+With 16 workers and 64 connections the same single replica reaches **302,895
+req/s**, so the plateau above is a worker-width limit, not a service-path limit.
+
+**Operating point: offered concurrency 32–64 per replica** — beyond that you buy
+latency, not throughput.
 
 ### 1c. Compute bound: the model forward (cache-miss)
 
@@ -96,153 +163,229 @@ service path, not CPU. On the miss path it is unambiguously the model forward.
 
 ## 2. How many connections per minute?
 
-Single replica, cache-hit, 4 workers, 256 B context:
+**The honest answer: it depends almost entirely on your cache hit ratio, and the
+range is 2,000×.** Everything else — workers, replicas, transport — moves the
+number by single-digit multiples. Hit ratio moves it by three orders of magnitude.
 
-> **96,804 req/s = 5,808,249 requests per minute**, zero errors.
+### The curve that matters (1 replica, 16 workers, 256 B)
 
-Scaled out, cache-hit, 8 workers/replica:
+| Hit ratio | req/s | **req/min** | p50 | p99 |
+|---:|---:|---:|---:|---:|
+| 0 % | 113 | 6,810 | 567.63 ms | 621.59 ms |
+| 50 % | 228 | 13,671 | 282.23 ms | 422.92 ms |
+| 80 % | 579 | 34,730 | 94.69 ms | 282.40 ms |
+| 90 % | 1,134 | 68,037 | 43.40 ms | 216.61 ms |
+| 95 % | 2,225 | 133,525 | 15.53 ms | 185.22 ms |
+| 99 % | 10,350 | 620,981 | 0.44 ms | 122.01 ms |
+| 100 % | 225,964 | **13,557,855** | 0.27 ms | 0.54 ms |
 
-| Replicas | req/s | **req/min** | Scaling vs 1 |
-|---:|---:|---:|---:|
-| 1 | 168,414 | 10,104,816 | 1.00× |
-| 2 | 320,606 | 19,236,334 | 1.90× |
-| 4 | 424,125 | 25,447,478 | 2.52× |
-| 8 | 602,988 | **36,179,267** | 3.58× |
+**Each additional nine of hit ratio multiplies throughput roughly tenfold.** The
+last 1 % of misses costs ~96 % of the achievable throughput. If you take one
+number away from this campaign, take this curve — capacity planning for llm-d-sc
+is cache-hit-ratio planning.
 
-On the **cache-miss** path the honest numbers are three orders of magnitude lower:
+### Ceilings at the extremes
 
-| Replicas | req/s | req/min |
+| Configuration | req/s | req/min |
+|---|---:|---:|
+| 1 replica, 16 workers, 64 connections, 100 % hit | 302,895 | 18,173,700 |
+| 4 replicas, 16 workers, 100 % hit | 614,483 | 36,868,980 |
+| 8 replicas, 8 workers, 100 % hit | 651,512 | **39,090,720** |
+| 1 replica, 0 % hit (every prompt novel) | 113 | 6,810 |
+| 8 replicas, 0 % hit | 404 | 24,217 |
+
+Quote the number **with its hit ratio**. "39 million requests/minute" and "24
+thousand requests/minute" are both true statements about the same software on the
+same hardware.
+
+## 2b. Connections are a client-side lever worth 6×
+
+Concurrency and connections are different things, and the second is easy to get
+wrong. Holding offered concurrency **fixed at 256** and varying only the number of
+HTTP/2 connections:
+
+| Connections | req/s | p50 |
 |---:|---:|---:|
-| 1 | 66 | 3,970 |
-| 8 | 380 | 22,817 |
+| 1 | 47,845 | 5.321 ms |
+| 2 | 88,810 | 2.860 ms |
+| 4 | 152,791 | 1.606 ms |
+| 8 | 223,339 | 1.089 ms |
+| 16 | 251,276 | 0.989 ms |
+| 32 | 290,192 | 0.850 ms |
+| **64** | **302,895** | 0.812 ms |
+| 128 | 301,883 | 0.780 ms |
+| 256 | 291,570 | 0.819 ms |
 
-**Quote the number with its path.** "36 million requests/minute" is true for
-cached classifications on 8 replicas; "23 thousand requests/minute" is true for
-novel prompts on the same hardware.
+A single HTTP/2 connection caps at **47,845 req/s** regardless of how much
+concurrency you offer it. Pooling to 64 connections is worth **6.3×** on identical
+offered load, and there is nothing to gain past 64.
 
----
+**Recommendation: client connection pool of 32–64 per llm-d-sc Service.** This
+costs nothing and is the single cheapest throughput win available.
+
+## 2c. ClusterIP is not a bottleneck
+
+Paired against deterministic client-side fan-out to all Pod IPs, same targets,
+same connection count, 4 replicas:
+
+| Concurrency | ClusterIP | Direct Pod-IP | Ratio |
+|---:|---:|---:|---:|
+| 128 | 406,151 | 412,949 | 0.984 |
+| 512 | 609,292 | 614,483 | 0.992 |
+
+The Service layer costs **0.8–1.6 %**. This independently reproduces Intel's
+Arena finding (their ClusterIP/direct ratio ranged 0.962–1.028). Bypassing
+`kube-proxy` is not worth the operational complexity.
 
 ## 3. Ideal scaling
 
 ### Vertical — executor workers (`LLM_D_SC_INFERENCE_WORKERS`)
 
-The two paths want *opposite* things.
+Corrected post-`tcp_nodelay`. The two paths behave differently, but neither
+declines:
 
-| Workers | hit req/s | miss req/s |
-|---:|---:|---:|
-| 1 | 39,759 | 9 |
-| 2 | 51,926 | 18 |
-| 4 | 84,962 | 35 |
-| **8** | **148,875** | 67 |
-| 16 | 107,795 | 115 |
-| 32 | 87,896 | **181** |
+| Workers | hit req/s | hit p99 | miss req/s | miss p50 |
+|---:|---:|---:|---:|---:|
+| 1 | 41,959 | 15.005 ms | 9 | 3,415.99 ms |
+| 2 | 60,576 | 21.478 ms | 18 | 1,742.24 ms |
+| 4 | 82,472 | 20.687 ms | 35 | 906.52 ms |
+| 8 | 160,073 | 4.648 ms | 66 | 482.53 ms |
+| **16** | **284,513** | **0.859 ms** | 116 | 278.05 ms |
+| 32 | 287,957 | 0.910 ms | 175 | 179.98 ms |
+| 48 | 282,512 | 1.025 ms | **200** | **160.93 ms** |
 
-* **Cache-hit peaks at 8 workers**, then *falls* 41 % by 32 workers — added
-  threads buy contention, not throughput.
-* **Cache-miss scales monotonically** to 32 workers (near-linear to 8: 2.0×,
-  1.94×, 1.91× per doubling; then 1.72×, 1.57×). It is compute-bound, so more
-  workers genuinely help.
+* **Cache-hit saturates at ~16 workers** (284k req/s, p99 0.859 ms) and then holds
+  flat to 48. Extra threads neither help nor hurt.
+* **Cache-miss keeps improving** to 48 workers — it is compute-bound on the model
+  forward, so more executor threads genuinely add capacity (per-doubling: 2.00×,
+  1.94×, 1.89×, 1.76×, 1.51×, then 1.14× at 48 as it flattens).
 
-> **Critical operational note.** `default_worker_width()` is
+> **Operational trap.** `default_worker_width()` is
 > `available_parallelism().min(4)` (`src/handoff.rs:62`). **Raising the CPU limit
 > alone cannot widen the pool past 4.** `LLM_D_SC_INFERENCE_WORKERS` must be set
-> explicitly, and the CPU limit raised to match, or the arm is CPU-starved.
+> explicitly and the CPU limit raised to match.
 
-**Recommendation: 8 workers / 8 CPU per replica** — the hit-path optimum and
-within 40 % of the miss-path optimum. Go to 16–32 only if the workload is
-miss-dominated.
+**Recommendation: 16 workers / 16 CPU per replica.** That is the hit-path
+saturation point and delivers sub-millisecond p99. Go to 32–48 only for
+miss-dominated traffic.
 
 ### Horizontal — replicas
 
-Horizontal scaling is *better on the expensive path*, which is the useful
-direction:
+| Replicas | hit req/s | scaling | miss req/s | scaling |
+|---:|---:|---:|---:|---:|
+| 1 | 156,054 | 1.00× | 65 | 1.00× |
+| 2 | 325,034 | 2.08× | 130 | 2.00× |
+| 4 | 573,646 | 3.68× | 240 | 3.69× |
+| 8 | 651,512 | 4.17× | 404 | **6.22×** |
 
-| Replicas | hit scaling | miss scaling |
-|---:|---:|---:|
-| 2 | 1.90× | 1.94× |
-| 4 | 2.52× | 3.62× |
-| 8 | 3.58× | **5.76×** |
+Horizontal scaling is **near-linear on the miss path** (6.22× at 8 replicas) and
+sublinear on the hit path, where shared resources (driver, network, transport)
+bind before the service does.
 
-The hit path saturates shared resources (network, driver, transport) before the
-service; the miss path is CPU-bound per replica and parallelises well.
+**Recommendation: scale horizontally for miss-heavy traffic; reach 16 workers
+first for hit-heavy traffic.**
 
-**Recommendation: scale horizontally for miss-heavy workloads; scale vertically
-(to 8 workers) first for hit-heavy ones.**
+## 3b. Stability under sustained load
 
----
+A 10-minute soak at 95 % hit ratio, concurrency 256, keyspace 2,000:
+
+| Metric | Value |
+|---|---:|
+| Requests | 1,375,603 |
+| Throughput | 2,293 req/s |
+| **Errors** | **0** |
+| p50 / p90 / p99 | 104.38 / 159.14 / 275.26 ms |
+| p99.9 / max | 1,923.74 / 2,133.83 ms |
+
+Throughput matches the 30-second run at the same hit ratio (2,225 req/s), so
+there is **no drift, leak or degradation** over 1.4 M requests. The higher p50
+versus the short run is Little's law, not decay — same saturated throughput at 4×
+the concurrency.
 
 ## 4. Semantic cache: when to turn it on
 
-**Measured result: the L2 semantic cache produced no throughput benefit in any
-arm, and cost ~5 % on the hit path.**
+**Answer: not at any hit ratio, not at any route count, and not across replicas.
+As currently architected it cannot help. Leave `LLM_D_SC_CACHE=exact`.**
 
-The tier was genuinely active — the service logged
-`semantic cache enabled (redis-semantic, threshold 0.9)` and Redis created index
-`sc_semantic_idx`, so this is a real measurement rather than a silent
-degradation to exact-only.
+This is a stronger claim than the first pass made, and it is now supported by
+three independent tests rather than one. The tier was genuinely active throughout
+— the service logged `semantic cache enabled (redis-semantic, threshold 0.9)` and
+Redis created index `sc_semantic_idx`, so these are real measurements and not a
+silent degradation to exact-only.
 
-| Arm | exact req/s | redis-semantic req/s | Δ |
-|---|---:|---:|---:|
-| hit, keyspace 1 | 105,338 | 100,511 | −4.6 % |
-| hit, keyspace 100 | 108,622 | 102,835 | −5.3 % |
-| hit, keyspace 10,000 | 146 | 146 | 0 % |
-| novel (all misses) | 67 | 67 | 0 % |
+### Test 1 — across the entire realistic hit-ratio range
 
-### Why — and it is architectural, not a bug
+| Hit ratio | exact req/s | redis-semantic req/s | Δ |
+|---:|---:|---:|---:|
+| 0 % | 113 | 113 | −0.5 % |
+| 50 % | 228 | 226 | −0.9 % |
+| 80 % | 579 | 570 | −1.6 % |
+| 90 % | 1,134 | 1,093 | −3.6 % |
+| 95 % | 2,225 | 2,195 | −1.3 % |
+| 99 % | 10,350 | 10,242 | −1.0 % |
+| 100 % | 225,964 | 214,730 | −5.0 % |
 
-In `ServiceCore::classify` the forward closure runs:
+**Never faster. Always 0.5–5.0 % slower.**
 
-```rust
-let embedding = runtime.embed(&input)?;              // ~122 ms  <-- the cost
-if let Some(hit) = semantic.lookup(&embedding, &tag) // needs the embedding
-    { return Ok(hit); }
-let result = runtime.rank(&embedding, &input)?;      // ~microseconds
-```
+### Test 2 — large taxonomies do not rescue it
 
-A vector similarity search **requires the query embedding**, so the embedding
-must be computed before the L2 lookup can happen. An L2 hit therefore still pays
-the expensive part and saves only ranking — 48 cosine similarities, microseconds.
-
-This is confirmed by the route-count sweep: taxonomies of 40, 48 and 50 anchors
-all produce ~66 req/s on the miss path. Ranking is free at this scale, so there
-is nothing for the semantic cache to save.
-
-### The "large taxonomy" escape hatch was tested, and it does not exist
-
-The obvious counter-argument is that ranking must eventually get expensive
-enough to be worth caching. It was tested directly with synthetic taxonomies from
-48 to 2,000 anchors (4 labels, 12–500 anchors each). Cache-miss throughput:
+The natural objection is that ranking must eventually get expensive enough to be
+worth caching. Synthetic taxonomies from 48 to 2,000 anchors, cache-miss path:
 
 | Anchors | exact req/s | redis-semantic req/s | p50 (exact) |
 |---:|---:|---:|---:|
 | 48 | 67 | 65 | 478.9 ms |
 | 200 | 67 | 67 | 477.8 ms |
 | 800 | 67 | 67 | 477.9 ms |
-| **2,000** | **67** | **67** | 482.1 ms |
+| 2,000 | 67 | 67 | 482.1 ms |
 
-**Perfectly flat.** A 42× increase in route count costs nothing measurable,
-because ranking is still negligible beside a ~480 ms embedding. There is no
-realistic route count at which the semantic cache's saving becomes material.
+Perfectly flat. A 42× increase in route count costs nothing measurable.
 
-So it pays off only if one of these changes:
+### Test 3 — cross-replica reuse, the case most likely to favour it
 
-* **A much cheaper embedder** — if embedding dropped toward the cost of ranking.
-* **Sharing across replicas** — an L2 hit on replica B for work replica A already
-  did. This is real value the single-replica arms here cannot show, and it is the
-  one case worth a dedicated multi-replica cold-start test.
+This was the one scenario the first pass flagged as untested and plausibly
+favourable: replica B reusing work replica A already did. Four replicas, cold
+Redis flushed between arms, 2,000 distinct keys cycled:
 
-**Recommendation for today: leave `LLM_D_SC_CACHE=exact` (the default).** Turn on
-`redis-semantic` only after a multi-replica cold-start test demonstrates
-cross-replica benefit exceeding the ~5 % hit-path cost. The runtime toggle exists
-and the image now ships with the feature compiled in, so this is a one-env-var
-decision requiring only a pod restart.
+| Arm | req/s | **Model forwards (L1 miss delta)** |
+|---|---:|---:|
+| exact | 318,509 | **8,000** |
+| redis-semantic | 332,074 | **8,000** |
+
+8,000 = 4 replicas × 2,000 keys. **Identical.** The L2 tier eliminated exactly
+zero model forwards. Replica B did not reuse replica A's work.
+
+### Why — and it is architectural, not a defect
+
+In `ServiceCore::classify` the forward closure runs:
+
+```rust
+let embedding = runtime.embed(&input)?;              // ~480 ms  <-- the cost
+if let Some(hit) = semantic.lookup(&embedding, &tag) // needs the embedding
+    { return Ok(hit); }
+let result = runtime.rank(&embedding, &input)?;      // microseconds
+```
+
+A vector similarity search **requires the query embedding**, so the embedding must
+be computed before the L2 lookup can happen. An L2 hit therefore still pays the
+expensive part and saves only ranking. That is true on the same replica, on a
+different replica, and at any taxonomy size — which is exactly what all three
+tests show.
+
+**For semantic caching to pay off, the lookup would have to be reachable without
+first embedding** — for example keyed on a cheap lexical signature, with the
+embedding computed only on an L2 miss. That is an architectural change, not a
+tuning decision, and well outside "minor bug fix" scope.
+
+**Recommendation: keep the default `LLM_D_SC_CACHE=exact`.** The runtime toggle
+and the compiled-in feature are both worth keeping — they cost nothing when off,
+and they make the tier available the moment the lookup path changes. But there is
+no configuration today in which turning it on is the right call on performance
+grounds.
 
 **Not measured: accuracy.** A semantic hit at threshold 0.90 serves a *different
-but similar* prompt's label. On a classifier whose job is separating tiers, that
-could blur borderline prompts. No accuracy evaluation was run. Do not enable it
-in production on latency grounds alone.
-
----
+but similar* prompt's label. On a classifier whose job is separating tiers that
+could blur borderline prompts. No accuracy evaluation was run.
 
 ## 4b. Route count is free
 
@@ -305,15 +448,30 @@ Praxis exposes a **control listener** (`:8081`) identical to the measured one
 (`:8080`) except that cluster selection is a static `router` rather than the
 classifier, so the delta is the cost of deciding *semantically* and nothing else.
 
-### Warm filter overhead is small
+### Filter overhead is not a constant — it is a capacity tax
 
-| Listener | req/s | p50 | p90 | p99 |
-|---|---:|---:|---:|---:|
-| `:8081` static router | 1,430 | 22.362 ms | 23.255 ms | 23.654 ms |
-| `:8080` classified | 1,271 | 24.425 ms | 27.655 ms | 35.528 ms |
+At low concurrency the `llm_d_sc` filter is cheap: **+2.06 ms p50, −11 %
+throughput** against an identical static-router control. That number is true and
+was the first pass's headline, but it is misleading on its own. Under a full
+saturation ladder — both listeners paired, backends scaled and set to zero
+simulated latency so the gateway is the limiter:
 
-**+2.06 ms p50, −11 % throughput.** For a routing decision on the request path,
-that is cheap.
+| Concurrency | Classified req/s | Control req/s | Cost | Classified p50 |
+|---:|---:|---:|---:|---:|
+| 16 | 7,883 | 9,531 | −17 % | 2.06 ms |
+| 64 | 25,629 | 30,674 | −16 % | 2.43 ms |
+| 128 | 35,184 | 49,643 | −29 % | 3.52 ms |
+| 256 | **37,783** | 57,445 | −34 % | 6.67 ms |
+| 512 | 37,297 | 64,726 | −42 % | 13.56 ms |
+| 1024 | 35,384 | 75,658 | **−53 %** | 28.38 ms |
+
+**The classified path saturates at ~37,800 req/s (2.27 M req/min) while the
+control path is still climbing at concurrency 1024.** For capacity planning the
+right statement is "classification roughly halves gateway throughput at
+saturation", not "+2 ms per request".
+
+The backends were verified not to be the limit: `vcr-small` × 3 with zero
+simulated latency sustains 45,399 req/s directly, above the gateway ceiling.
 
 ### But novel prompts do not get classified at all
 
@@ -373,12 +531,16 @@ Stated plainly, per house rule 7:
 
 | # | Recommendation | Basis |
 |---|---|---|
-| 1 | Run **8 workers / 8 CPU** per replica | hit-path peak; §3 |
-| 2 | Hold **offered concurrency 32–64** per replica | knee at 64, retrograde beyond; §1b |
-| 3 | Size for **256 in-flight per replica**; scale out past that | hard admission bound; §1a |
-| 4 | **Raise `timeout_ms` above the forward latency, or warm the cache** | novel prompts fail open; §6 |
-| 5 | **Alarm on fail-open rate**, not just error rate | silent routing loss; §6 |
-| 6 | Keep **`LLM_D_SC_CACHE=exact`** until cross-replica benefit is shown | §4 |
-| 7 | Classify **turn deltas, not documents** | 3× latency + truncation; §5 |
-| 9 | **Add routes freely** — 48→2,000 anchors costs nothing | §4b |
-| 8 | Make `DEFAULT_QUEUE_BOUND` runtime-configurable | operators cannot tune admission; §1a |
+| 1 | **Plan capacity by cache hit ratio first.** It spans 2,000×; nothing else comes close | §2 |
+| 2 | Run **16 workers / 16 CPU** per replica (not 8) | §3 |
+| 3 | **Client connection pool of 32–64** — worth 6.3× on identical load | §2b |
+| 4 | Hold **offered concurrency 32–64** per replica | §1b |
+| 5 | Size for **256 in-flight per replica**; scale out past that | §1a |
+| 6 | **Raise `timeout_ms` above the forward latency, or warm the cache** | §6 |
+| 7 | **Alarm on fail-open rate**, not just error rate | §6 |
+| 8 | Keep **`LLM_D_SC_CACHE=exact`** — no configuration makes L2 pay today | §4 |
+| 9 | Classify **turn deltas, not documents** | §5 |
+| 10 | **Add routes freely** — 48→2,000 anchors costs nothing | §4b |
+| 11 | Don't bypass ClusterIP — it costs 0.8–1.6 % | §2c |
+| 12 | Budget **~half your gateway throughput** for classification at saturation | §6 |
+| 13 | Make `DEFAULT_QUEUE_BOUND` runtime-configurable | §1a |

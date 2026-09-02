@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "label": "c9-direct-c512",
+  "mode": "grpc",
+  "targets": [
+    "http://10.0.3.53:50051",
+    "http://10.0.3.77:50051",
+    "http://10.0.3.86:50051",
+    "http://10.0.3.88:50051"
+  ],
+  "concurrency": 512,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 72904,
+  "warmup_requests": 4000,
+  "measured_requests": 12290290,
+  "wall_secs": 20.001031025,
+  "throughput_rps": 614482.8226423892,
+  "throughput_rpm": 36868969.35854335,
+  "offered_concurrency": 512,
+  "implied_mean_ms": 0.8332210130761765,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "COMPLEX": 12290290
+  },
+  "latency": {
+    "count": 12290290,
+    "min_ms": 0.135934,
+    "mean_ms": 0.8334946321295917,
+    "stddev_ms": 0.6253873265402213,
+    "p50_ms": 0.784619,
+    "p90_ms": 1.24378,
+    "p95_ms": 1.402475,
+    "p99_ms": 1.741999,
+    "p999_ms": 2.229704,
+    "max_ms": 149.862276
+  },
+  "started_unix": 1788372905
+}

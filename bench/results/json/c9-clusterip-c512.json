@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "c9-clusterip-c512",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 512,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 72883,
+  "warmup_requests": 4000,
+  "measured_requests": 12186474,
+  "wall_secs": 20.001052971,
+  "throughput_rps": 609291.6216795914,
+  "throughput_rpm": 36557497.30077548,
+  "offered_concurrency": 512,
+  "implied_mean_ms": 0.8403201058117385,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "COMPLEX": 12186474
+  },
+  "latency": {
+    "count": 12186474,
+    "min_ms": 0.131798,
+    "mean_ms": 0.8405195213607316,
+    "stddev_ms": 0.6186969491208159,
+    "p50_ms": 0.792265,
+    "p90_ms": 1.253291,
+    "p95_ms": 1.411663,
+    "p99_ms": 1.744122,
+    "p999_ms": 2.189228,
+    "max_ms": 146.670551
+  },
+  "started_unix": 1788372884
+}

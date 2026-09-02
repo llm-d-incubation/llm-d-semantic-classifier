@@ -8,7 +8,7 @@ Methodology rule 5: every result carries a manifest. This is it.
 | cluster | CoreWeave *waldorf* (`api.6787d4-33de361c.k8s.us-east-04a.coreweave.com`) |
 | namespace | `cnuland-dev` |
 | llm-d-sc branch | `v0.2-staging` |
-| llm-d-sc commit | `9eb7b58c52e8bfe4eec19a5fe8d1c0403f891d67` |
+| llm-d-sc commit | `9eb7b58` (pre-fix arms) / `f57d4ef` (post-tcp_nodelay arms, prefix v2/c8-c13) |
 | build features | `--release --features redis-semantic` |
 | model | `cnuland/llm-d-sc-complexity` @ `c5f55ef419d268ba843c544dc00988d1e9878044` |
 | taxonomies | complexity (4 labels / 48 anchors), cost (4/40), sensitivity (5/50), plus synthetic 48/200/800/2000-anchor variants |
@@ -20,7 +20,7 @@ Methodology rule 5: every result carries a manifest. This is it.
 | gateway node | `gf48cf2` · endpoints node | `gf49e9c` |
 | driver | `scbench` (this repo, `bench/driver`), closed-loop |
 | percentiles | nearest-rank, identical to `src/bench.rs::percentile` |
-| runs captured | 84 |
+| runs captured | 163 |
 
 ## Raw data
 

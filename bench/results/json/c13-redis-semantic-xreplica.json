@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "label": "c13-redis-semantic-xreplica",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 128,
+  "connections": 64,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "hit_ratio": 0.9,
+  "keyspace": 2000,
+  "run_id": 74424,
+  "warmup_requests": 100,
+  "measured_requests": 29886991,
+  "wall_secs": 90.000977834,
+  "throughput_rps": 332074.0698520442,
+  "throughput_rpm": 19924444.191122655,
+  "offered_concurrency": 128,
+  "implied_mean_ms": 0.38545617264555004,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "COMPLEX": 28867217,
+    "MEDIUM": 1019774
+  },
+  "latency": {
+    "count": 29886991,
+    "min_ms": 0.090498,
+    "mean_ms": 0.38311918671796036,
+    "stddev_ms": 4.92304564407159,
+    "p50_ms": 0.274224,
+    "p90_ms": 0.416981,
+    "p95_ms": 0.462614,
+    "p99_ms": 0.55302,
+    "p999_ms": 0.75954,
+    "max_ms": 546.282239
+  },
+  "started_unix": 1788374425
+}
