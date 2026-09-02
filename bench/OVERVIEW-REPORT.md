@@ -361,8 +361,13 @@ Stated plainly, per house rule 7:
   pay off.
 * **Miss-path arms have fewer samples** (~1–3 k) than hit-path arms (~2 M), so
   miss-path p99.9 is not well determined. p50/p90 are sound.
-* **The `llm-d` integration and the vLLM SR integration were not benchmarked** —
-  the cluster window did not allow it. Both remain open.
+* **The `llm-d` integration was not benchmarked.** The integration PR could not
+  be located: `llm-d/llm-d`, `praxis-proxy/praxis`, every `llm-d-incubation`
+  repository and `inference-payload-processor-rs` were searched without finding
+  it. The harness is topology-agnostic — `scbench --mode http` will drive any
+  OpenAI-shaped gateway — so this needs only a pointer to the PR and an endpoint,
+  not new tooling.
+* **The vLLM Semantic Router integration is a stretch goal** and was not started.
 
 ## 8. Summary recommendations
 
