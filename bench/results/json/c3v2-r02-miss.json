@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "c3v2-r02-miss",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 64,
+  "connections": 64,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "keyspace": 1,
+  "run_id": 1788371814,
+  "warmup_requests": 100,
+  "measured_requests": 3915,
+  "wall_secs": 30.001217307,
+  "throughput_rps": 130.49470492940753,
+  "throughput_rpm": 7829.682295764452,
+  "offered_concurrency": 64,
+  "implied_mean_ms": 490.44135572107285,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "COMPLEX": 40,
+    "MEDIUM": 3875
+  },
+  "latency": {
+    "count": 3915,
+    "min_ms": 369.215549,
+    "mean_ms": 489.45977392234994,
+    "stddev_ms": 50.39743317220959,
+    "p50_ms": 490.920537,
+    "p90_ms": 556.571029,
+    "p95_ms": 569.481885,
+    "p99_ms": 588.833525,
+    "p999_ms": 611.283833,
+    "max_ms": 640.644515
+  },
+  "started_unix": 1788371816
+}

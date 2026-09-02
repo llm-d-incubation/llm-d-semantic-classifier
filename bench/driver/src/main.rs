@@ -56,8 +56,14 @@ struct Args {
     #[arg(long, default_value_t = 256)]
     context_bytes: usize,
     /// hit = one stable key (cache hits). miss = unique per-request keys.
+    /// mixed = a weighted blend, controlled by --hit-ratio.
     #[arg(long, default_value = "miss")]
     cache_mode: String,
+    /// In `mixed` mode, the fraction of requests drawn from the warm keyspace.
+    /// 0.0 = every request novel, 1.0 = every request a repeat. Real workloads
+    /// live in between, and this is the axis that decides whether caching pays.
+    #[arg(long, default_value_t = 0.9)]
+    hit_ratio: f64,
     /// Distinct prompt keys in hit mode; models a working set larger than one.
     #[arg(long, default_value_t = 1)]
     keyspace: u64,
@@ -106,6 +112,34 @@ compute tiers while maintaining throughput guarantees and bounded tail latency f
 /// HIT keys are deliberately SHARED across phases -- pre-warming them is the
 /// whole point of a hit arm.
 fn context_for(cache_mode: &str, run_id: u64, index: u64, keyspace: u64, measuring: bool) -> String {
+    context_for_mix(cache_mode, run_id, index, keyspace, measuring, 1.0)
+}
+
+/// As [`context_for`], with a `mixed` mode that blends warm and novel keys.
+///
+/// The split is DETERMINISTIC on the request index (a hash, not an RNG) so two
+/// runs with the same parameters draw the same sequence and are comparable.
+fn context_for_mix(cache_mode: &str, run_id: u64, index: u64, keyspace: u64,
+                   measuring: bool, hit_ratio: f64) -> String {
+    if cache_mode == "mixed" {
+        // splitmix64-style scramble: cheap, and decorrelated from `index % k`
+        // so the hit/miss choice is not aliased to the keyspace stride.
+        let mut z = index.wrapping_mul(0x9E3779B97F4A7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        let r = ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64;
+        return if r < hit_ratio {
+            // Warm keys are SHARED across phases on purpose -- warmup exists to
+            // populate them.
+            format!("hitkey-{run_id}-{}", index % keyspace.max(1))
+        } else if measuring {
+            format!("measure-{run_id}-{index}")
+        } else {
+            // Novel keys stay phase-namespaced here too, or warmup's novel keys
+            // become silent hits for the measured novel keys of the same index.
+            format!("warm-{run_id}-{index}")
+        };
+    }
     if cache_mode == "hit" {
         format!("hitkey-{run_id}-{}", index % keyspace.max(1))
     } else if measuring {
@@ -173,6 +207,7 @@ struct Report {
     connections: usize,
     context_bytes: usize,
     cache_mode: String,
+    hit_ratio: f64,
     keyspace: u64,
     run_id: u64,
     warmup_requests: u64,
@@ -201,6 +236,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let counter = Arc::new(AtomicU64::new(0));
     let errors = Arc::new(AtomicU64::new(0));
+    // Merged once per worker at the end. A per-request lock on a shared map
+    // serialises every thread through one mutex and makes the DRIVER the
+    // bottleneck -- which shows up as a throughput ceiling that has nothing to do
+    // with the service under test.
     let statuses: Arc<std::sync::Mutex<std::collections::BTreeMap<String, u64>>> =
         Arc::new(std::sync::Mutex::new(Default::default()));
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -250,11 +289,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handles.push(tokio::spawn(async move {
             let mut grpc = chan.map(ClassifyClient::new);
             let mut local: Vec<(u64, u8)> = Vec::with_capacity(1 << 16);
+            let mut local_status: std::collections::BTreeMap<String, u64> = Default::default();
             loop {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
                 let is_measuring = measuring.load(Ordering::Relaxed);
+                // In mixed mode the warmup must POPULATE the warm keyspace, or
+                // the "hit" fraction would not actually be warm.
                 let idx = if is_measuring {
                     let c = counter.fetch_add(1, Ordering::Relaxed);
                     if args.requests > 0 && c >= args.requests {
@@ -264,7 +306,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     warm_done.fetch_add(1, Ordering::Relaxed) as u64
                 };
-                let ctx = context_for(&args.cache_mode, args.run_id, idx, args.keyspace, is_measuring);
+                let ctx = context_for_mix(&args.cache_mode, args.run_id, idx, args.keyspace, is_measuring, args.hit_ratio);
                 let prompt = make_prompt(&ctx, args.context_bytes);
 
                 let t0 = Instant::now();
@@ -277,7 +319,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         context_completeness: 0,
                     };
                     match c.classify(req).await {
-                        Ok(_) => (true, "OK".into()),
+                        Ok(resp) => {
+                            // Rule 3: the harness must verify its own premise. A
+                            // transport-level Ok proves only that bytes came back;
+                            // it does NOT prove a classification happened. Without
+                            // this check a service that returned an empty ranking
+                            // at wire speed would look like record throughput.
+                            let r = resp.into_inner();
+                            let top = r.ranked.iter().max_by(|a, b| {
+                                a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            match (r.status, top) {
+                                // 1 == ClassificationStatus::OK
+                                (1, Some(t)) if !t.label.is_empty() => {
+                                    // Label is interned per worker by the tally
+                                    // map, so this allocation happens once per
+                                    // distinct label, not once per request.
+                                    (true, t.label.clone())
+                                }
+                                (1, _) => (false, "INVALID_EMPTY_RANKING".into()),
+                                (st, _) => (false, format!("STATUS_{st}")),
+                            }
+                        }
                         Err(e) => (false, format!("{:?}", e.code())),
                     }
                 } else {
@@ -298,9 +361,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match http_client.request(req).await {
                         Ok(resp) => {
                             let st = resp.status();
-                            // Drain so the connection is reusable.
-                            let _ = http_body_util::BodyExt::collect(resp.into_body()).await;
-                            (st.is_success(), format!("HTTP_{}", st.as_u16()))
+                            // Drain so the connection is reusable, and confirm the
+                            // gateway actually produced a completion: a 200 with an
+                            // empty `choices` is a failure that would otherwise be
+                            // scored as success.
+                            let body = http_body_util::BodyExt::collect(resp.into_body())
+                                .await
+                                .map(|b| b.to_bytes())
+                                .unwrap_or_default();
+                            if !st.is_success() {
+                                (false, format!("HTTP_{}", st.as_u16()))
+                            } else {
+                                match serde_json::from_slice::<serde_json::Value>(&body) {
+                                    Ok(v) if v.get("choices")
+                                              .and_then(|c| c.as_array())
+                                              .map(|a| !a.is_empty()) == Some(true) =>
+                                        (true, "HTTP_200".into()),
+                                    _ => (false, "HTTP_200_EMPTY_CHOICES".into()),
+                                }
+                            }
                         }
                         Err(e) => (false, format!("TRANSPORT_{e}")),
                     }
@@ -312,11 +391,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if !ok {
                         errors.fetch_add(1, Ordering::Relaxed);
                     }
-                    let mut m = statuses.lock().unwrap();
-                    *m.entry(status).or_insert(0) += 1;
+                    // Cheap in the common case: only allocate a new key the first
+                    // time a given status is seen by this worker.
+                    if let Some(v) = local_status.get_mut(status.as_str()) {
+                        *v += 1;
+                    } else {
+                        local_status.insert(status, 1);
+                    }
                 }
             }
             samples.lock().unwrap().extend(local);
+            {
+                let mut m = statuses.lock().unwrap();
+                for (k, v) in local_status {
+                    *m.entry(k).or_insert(0) += v;
+                }
+            }
         }));
     }
 
@@ -359,6 +449,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         connections: args.connections,
         context_bytes: args.context_bytes,
         cache_mode: args.cache_mode.clone(),
+        hit_ratio: args.hit_ratio,
         keyspace: args.keyspace,
         run_id: args.run_id,
         warmup_requests: args.warmup,

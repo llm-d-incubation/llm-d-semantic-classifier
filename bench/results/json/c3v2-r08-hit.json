@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "label": "c3v2-r08-hit",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "keyspace": 1,
+  "run_id": 1788371922,
+  "warmup_requests": 2000,
+  "measured_requests": 13030891,
+  "wall_secs": 20.001014362,
+  "throughput_rps": 651511.5065742584,
+  "throughput_rpm": 39090690.39445551,
+  "offered_concurrency": 1024,
+  "implied_mean_ms": 1.5717297233694918,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "MEDIUM": 13030891
+  },
+  "latency": {
+    "count": 13030891,
+    "min_ms": 0.113766,
+    "mean_ms": 1.5744472907798093,
+    "stddev_ms": 1.0659469227639362,
+    "p50_ms": 1.449593,
+    "p90_ms": 2.498846,
+    "p95_ms": 2.882555,
+    "p99_ms": 3.716629,
+    "p999_ms": 4.862038,
+    "max_ms": 160.557879
+  },
+  "started_unix": 1788371923
+}

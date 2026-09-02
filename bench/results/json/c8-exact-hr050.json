@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "label": "c8-exact-hr050",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 64,
+  "connections": 64,
+  "context_bytes": 256,
+  "cache_mode": "mixed",
+  "hit_ratio": 0.5,
+  "keyspace": 500,
+  "run_id": 72150,
+  "warmup_requests": 4000,
+  "measured_requests": 6836,
+  "wall_secs": 30.001136829,
+  "throughput_rps": 227.8580321460391,
+  "throughput_rpm": 13671.481928762347,
+  "offered_concurrency": 64,
+  "implied_mean_ms": 280.8766467314219,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "COMPLEX": 3738,
+    "MEDIUM": 3098
+  },
+  "latency": {
+    "count": 6836,
+    "min_ms": 103.335637,
+    "mean_ms": 280.901114479959,
+    "stddev_ms": 80.47963128307698,
+    "p50_ms": 282.232765,
+    "p90_ms": 388.153489,
+    "p95_ms": 400.813749,
+    "p99_ms": 422.915674,
+    "p999_ms": 464.141136,
+    "max_ms": 491.287529
+  },
+  "started_unix": 1788372172
+}
