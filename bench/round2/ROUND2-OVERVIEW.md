@@ -134,6 +134,64 @@ constant the honest number is ~16 % in the useful operating range.
 
 ---
 
+## Latency and tail stability: Praxis vs llm-d IPP
+
+Throughput comparisons hid this. Both paths classify, both front the same
+backends, so latency at matched concurrency is the fair read.
+
+### Median and tail, matched concurrency
+
+| Conc | Praxis p50 | Praxis p99 | IPP p50 | IPP p99 |
+|---:|---:|---:|---:|---:|
+| 8 | **1.957 ms** | **2.898 ms** | 2.003 ms | 3.015 ms |
+| 32 | 2.314 ms | 3.492 ms | **2.094 ms** | **3.323 ms** |
+| 128 | 3.646 ms | 6.275 ms | **3.207 ms** | **5.723 ms** |
+| 256 | 6.725 ms | 11.040 ms | **4.747 ms** | **9.333 ms** |
+| 512 | 12.755 ms | 22.662 ms | **8.122 ms** | **16.222 ms** |
+
+Praxis is **faster at low load** (c8) and near-tied to c128; IPP pulls ahead only
+under heavy load.
+
+### Tail *ratio*: Praxis is tighter at every load
+
+p99/p50 — how far the tail sits from the median:
+
+| Conc | Praxis | IPP |
+|---:|---:|---:|
+| 8 | **1.48×** | 1.51× |
+| 64 | **1.68×** | 1.72× |
+| 256 | **1.64×** | 1.97× |
+| 512 | **1.78×** | 2.00× |
+
+### But past saturation, Praxis's EXTREME tail diverges
+
+This is the finding a throughput table cannot show. Both arms at concurrency 512,
+**zero errors** in each:
+
+| | p50 | p99 | **p99.9** | **max** | p99.9/p99 |
+|---|---:|---:|---:|---:|---:|
+| **Praxis** | 12.755 ms | 22.662 ms | **352.443 ms** | **467.864 ms** | **15.55×** |
+| **IPP** | 8.122 ms | 16.222 ms | 22.908 ms | 33.502 ms | **1.41×** |
+
+At concurrency 1024 Praxis is worse still: p99 57.5 ms, **p99.9 754.9 ms, max
+1,336 ms** — 1.3-second stalls on 1-in-1000 requests, reported as successes.
+
+**Both intuitions are correct, at different loads:**
+
+* **At or below concurrency 256** — Praxis is the more predictable proxy: tighter
+  p99/p50 *and* comparable p99.9 (14.4 ms vs IPP's 16.0 ms).
+* **Past its knee (512+)** — Praxis stops degrading gracefully. Its failure mode
+  is rare, severe stalls rather than uniform slowdown; IPP's worst case stays
+  within 1.41× of its p99.
+
+For an enterprise gateway that is a defensible trade — excellent behaviour in the
+operating range, poor behaviour past it — but it makes **staying under the knee
+an SLO requirement, not a tuning preference**, and it means p99 alone will not
+detect the problem. Alarm on p99.9.
+
+The resource asymmetry cuts against Praxis here too: 16 req/32 limit CPU versus
+Envoy 4/12 plus IPP 8/16.
+
 ## Route count is free — at both layers
 
 Round 1 showed ranking cost is flat from 48 to 2,000 **anchors**. Round 2 tests the
