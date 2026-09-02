@@ -97,6 +97,7 @@ fn i080_latency_decomposition_metrics_visible() {
             session_id: "sess-0001".to_string(),
             context: "unique sensitivity context with distinct tokens".to_string(),
             signals: Vec::new(),
+            context_completeness: Default::default(),
         })
         .expect("cache-miss classify must succeed");
     assert!(!miss.ranked.is_empty(), "miss must return ranked signals");
@@ -112,6 +113,7 @@ fn i080_latency_decomposition_metrics_visible() {
             session_id: "sess-0001".to_string(),
             context: "unique sensitivity context with distinct tokens".to_string(),
             signals: Vec::new(),
+            context_completeness: Default::default(),
         })
         .expect("cache-hit classify must succeed");
     assert!(!hit.ranked.is_empty(), "hit must return ranked signals");

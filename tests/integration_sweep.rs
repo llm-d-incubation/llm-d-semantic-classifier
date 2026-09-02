@@ -30,6 +30,7 @@ fn input(text: &str) -> ClassificationInput {
         text: text.to_string(),
         requested_signals: Vec::new(),
         session_metadata: Default::default(),
+        context_completeness: Default::default(),
     }
 }
 

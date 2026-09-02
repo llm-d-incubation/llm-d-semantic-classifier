@@ -3,6 +3,7 @@ target/
 node_modules/
 *.log
 .DS_Store
+.idea/
 
 # Training pipeline outputs: regenerable from training/sdg_llm.py + verify.py.
 # The generated corpora and fine-tuned weights are large and are reproduced by

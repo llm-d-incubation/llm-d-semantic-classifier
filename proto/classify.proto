@@ -15,12 +15,22 @@ enum ClassificationStatus {
   UNAVAILABLE = 3;
 }
 
+// Declares whether `context` contains enough conversation context to classify.
+// This is semantic input supplied by the gateway; it does not transfer session
+// or routing authority to llm-d-sc.
+enum ContextCompleteness {
+  CONTEXT_COMPLETENESS_UNSPECIFIED = 0;
+  FULL = 1;
+  DELTA = 2;
+}
+
 // A classification request from the (dummy) the AI Gateway client.
 message ClassifyRequest {
   string request_id = 1;
   string session_id = 2;
   string context = 3;
   repeated string signals = 4;
+  ContextCompleteness context_completeness = 5;
 }
 
 // One ranked semantic signal: a label and its deterministic similarity score.
