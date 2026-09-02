@@ -30,7 +30,10 @@ use pb::classify_client::ClassifyClient;
 #[derive(Parser, Debug, Clone)]
 #[command(name = "scbench")]
 struct Args {
-    /// Path under test: grpc (classify direct) or http (gateway chat-completions).
+    /// Path under test:
+    ///   grpc     classify.Classify directly (isolates the classifier)
+    ///   http     OpenAI chat-completions through a gateway
+    ///   classify vLLM Semantic Router's http_classify contract (POST /classify)
     #[arg(long, default_value = "grpc")]
     mode: String,
     /// Target endpoints, comma separated. grpc: http://host:50051 . http: http://host:8080
@@ -376,6 +379,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         Err(e) => (false, format!("{:?}", e.code())),
+                    }
+                } else if args.mode == "classify" {
+                    // vLLM SR http_classify: {"inputs": text} -> [{label, score}]
+                    // A 200 whose scores do not sum to ~1.0 is a FAILURE: the
+                    // router rejects exactly that, so counting it as success
+                    // would measure something the router would never accept.
+                    let body = serde_json::json!({"inputs": prompt});
+                    let req = hyper::Request::builder()
+                        .method("POST")
+                        .uri(format!("{target}/classify"))
+                        .header("content-type", "application/json")
+                        .body(http_body_util::Full::new(bytes::Bytes::from(
+                            serde_json::to_vec(&body).unwrap())))
+                        .unwrap();
+                    match http_client.request(req).await {
+                        Ok(resp) => {
+                            let st = resp.status();
+                            let b = http_body_util::BodyExt::collect(resp.into_body())
+                                .await.map(|x| x.to_bytes()).unwrap_or_default();
+                            if !st.is_success() {
+                                (false, format!("HTTP_{}", st.as_u16()))
+                            } else {
+                                match serde_json::from_slice::<Vec<serde_json::Value>>(&b) {
+                                    Ok(v) if !v.is_empty() => {
+                                        let sum: f64 = v.iter()
+                                            .filter_map(|x| x.get("score").and_then(|s| s.as_f64()))
+                                            .sum();
+                                        if (sum - 1.0).abs() > 0.01 {
+                                            (false, "SCORES_NOT_NORMALISED".into())
+                                        } else {
+                                            let top = v[0].get("label")
+                                                .and_then(|l| l.as_str()).unwrap_or("?");
+                                            (true, top.to_string())
+                                        }
+                                    }
+                                    _ => (false, "BAD_CLASSIFY_BODY".into()),
+                                }
+                            }
+                        }
+                        Err(e) => (false, format!("TRANSPORT_{e}")),
                     }
                 } else {
                     let body = serde_json::json!({

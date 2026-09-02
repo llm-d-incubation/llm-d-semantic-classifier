@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package classify;
+
+// AC-009: a long-lived classification service that returns versioned semantic
+// evidence (ranked signals), never a final route (AC-010).
+
+// Classification outcome status, aligned to the spec failure contract:
+// OK is a real ranked result; ABSTAIN is "insufficient context where required";
+// UNAVAILABLE is an explicit failure.
+enum ClassificationStatus {
+  CLASSIFICATION_STATUS_UNSPECIFIED = 0;
+  OK = 1;
+  ABSTAIN = 2;
+  UNAVAILABLE = 3;
+}
+
+// Declares whether `context` contains enough conversation context to classify.
+// This is semantic input supplied by the gateway; it does not transfer session
+// or routing authority to llm-d-sc.
+enum ContextCompleteness {
+  CONTEXT_COMPLETENESS_UNSPECIFIED = 0;
+  FULL = 1;
+  DELTA = 2;
+}
+
+// A classification request from the (dummy) the AI Gateway client.
+message ClassifyRequest {
+  string request_id = 1;
+  string session_id = 2;
+  string context = 3;
+  repeated string signals = 4;
+  ContextCompleteness context_completeness = 5;
+}
+
+// One ranked semantic signal: a label and its deterministic similarity score.
+message RankedSignal {
+  string label = 1;
+  float score = 2;
+}
+
+// The semantic evidence produced by llm-d-sc.
+//
+// Carries request_id, classifier_id, the exact model/tokenizer/taxonomy
+// revisions required to reproduce the result, a ClassificationStatus, and the
+// ranked RankedSignal entries. The schema contains NO route/endpoint field
+// (ADR-0001, AC-010): routing/session authority stays with the AI Gateway, and a route
+// is unrepresentable on the wire rather than merely discouraged.
+message ClassifyResponse {
+  string request_id = 1;
+  string classifier_id = 2;
+  string model_revision = 3;
+  string tokenizer_revision = 4;
+  string taxonomy_revision = 5;
+  ClassificationStatus status = 6;
+  repeated RankedSignal ranked = 7;
+}
+
+service Classify {
+  rpc Classify(ClassifyRequest) returns (ClassifyResponse);
+}

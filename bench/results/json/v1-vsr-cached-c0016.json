@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "v1-vsr-cached-c0016",
+  "mode": "classify",
+  "targets": [
+    "http://llm-d-sc-vsr-adapter.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 16,
+  "connections": 16,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 83072,
+  "warmup_requests": 2000,
+  "measured_requests": 651122,
+  "wall_secs": 20.000969636,
+  "throughput_rps": 32554.521698189932,
+  "throughput_rpm": 1953271.3018913958,
+  "offered_concurrency": 16,
+  "implied_mean_ms": 0.4914831846812119,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "COMPLEX": 651122
+  },
+  "latency": {
+    "count": 651122,
+    "min_ms": 0.195564,
+    "mean_ms": 0.4906374503073157,
+    "stddev_ms": 0.1581157028519064,
+    "p50_ms": 0.449815,
+    "p90_ms": 0.71611,
+    "p95_ms": 0.790618,
+    "p99_ms": 0.941223,
+    "p999_ms": 1.124396,
+    "max_ms": 3.034336
+  },
+  "started_unix": 1788383073
+}

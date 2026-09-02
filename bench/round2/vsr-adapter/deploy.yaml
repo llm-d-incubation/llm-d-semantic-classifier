@@ -1,0 +1,45 @@
+# llm-d-sc exposed over vLLM Semantic Router's http_classify contract.
+#
+# The router addresses this as an external model with
+#   llm_endpoint: {address: llm-d-sc-vsr-adapter, port: 8080, protocol: http}
+# and a classifier declared `type: sequence_classifier` pointing at it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-d-sc-vsr-adapter
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-vsr-adapter, component: vsr-adapter}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: llm-d-sc-vsr-adapter}}
+  template:
+    metadata:
+      labels: {app: llm-d-sc-vsr-adapter, component: vsr-adapter}
+    spec:
+      nodeSelector: {kubernetes.io/hostname: gf48cf2}
+      containers:
+        - name: adapter
+          image: debian:bookworm-slim
+          command: ["/work/bin/llm-d-sc-vsr-adapter"]
+          env:
+            - {name: LLM_D_SC_ENDPOINT, value: "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"}
+            - {name: VSR_ADAPTER_LISTEN, value: "0.0.0.0:8080"}
+          ports: [{containerPort: 8080, name: http}]
+          volumeMounts: [{name: work, mountPath: /work, readOnly: true}]
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 3
+            periodSeconds: 3
+          resources:
+            requests: {cpu: "4", memory: 2Gi}
+            limits: {cpu: "8", memory: 8Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace, readOnly: true}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: llm-d-sc-vsr-adapter, namespace: cnuland-dev}
+spec:
+  selector: {app: llm-d-sc-vsr-adapter}
+  ports: [{name: http, port: 8080, targetPort: 8080}]

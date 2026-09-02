@@ -140,13 +140,127 @@ than glossed.
 
 ---
 
+## vLLM Semantic Router integration (stretch goal — delivered)
+
+llm-d-sc now works with vLLM Semantic Router. The integration is a small adapter,
+`bench/round2/vsr-adapter`, and it surfaced one genuine incompatibility worth
+recording.
+
+### How the integration works
+
+vLLM SR classifies in-process via its own Candle binding, but it also supports
+remote heads: a classifier declared `type: sequence_classifier`, backed by an
+external model whose endpoint speaks the `http_classify` contract
+(`pkg/classification/http_classifier.go`):
+
+```
+POST /classify        Authorization: Bearer <access_key>
+  request   {"inputs": "<text>"}
+  response  [{"label": "...", "score": 0.93}, ...]
+```
+
+llm-d-sc's `Classify` already returns `ranked` as (label, score) pairs over a
+versioned taxonomy, so the adapter is a transport bridge: gRPC in, JSON out.
+
+Router-side config:
+
+```yaml
+vllm_endpoints:
+  - name: llm-d-sc
+    llm_provider: openai
+    model_role: classification
+    llm_endpoint:
+      address: llm-d-sc-vsr-adapter
+      port: 8080
+      protocol: http
+classifiers:
+  - name: llm-d-sc-complexity
+    type: sequence_classifier
+    model: llm-d-sc
+    labels: [SIMPLE, MEDIUM, COMPLEX, REASONING]
+```
+
+### The incompatibility: similarities are not probabilities
+
+**A naive adapter is rejected outright.** vLLM SR validates the contract —
+`alignScoresToMapping` errors if the scores do not sum to ~1.0, and the docs are
+explicit that "sigmoid multi-label outputs and label subsets are rejected".
+
+llm-d-sc emits **cosine similarities in [−1, 1]**, not a distribution. A real
+response before normalisation:
+
+```json
+[{"label":"COMPLEX","score":0.99972},{"label":"SIMPLE","score":-0.22546},
+ {"label":"REASONING","score":-0.23415},{"label":"MEDIUM","score":-0.60279}]   // sums to -0.063
+```
+
+The two systems agree on the **ranking** and disagree on the **score semantics**.
+The adapter bridges them with a softmax (monotonic, so llm-d-sc's ordering and
+argmax are preserved exactly; sums to 1 by construction; temperature
+configurable). Verified end to end:
+
+| Prompt | Top label | Distribution sum |
+|---|---|---:|
+| "Design a multi-region microservices architecture with failover" | **COMPLEX** (0.560) | 1.000000 |
+| "What is the capital of France?" | **SIMPLE** (0.532) | 1.000000 |
+| "Prove by induction that the sum of the first n odd numbers is n squared" | **REASONING** (0.558) | 1.000000 |
+
+> **Carry this caveat forward.** These are softmaxed similarities, not calibrated
+> probabilities. Any router-side threshold (`gte: 0.5` and friends) is a threshold
+> on *this transform* and must be tuned against it, not inherited from a model
+> that emits real posteriors.
+
+### How it performs
+
+| Concurrency | req/s | req/min | p50 | p90 | p99 | mean | errors |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 8 | 22,671 | 1,360,282 | 0.321 ms | 0.499 ms | 0.664 ms | 0.352 ms | 0 |
+| **32** | **42,387** | 2,543,243 | 0.713 ms | 1.049 ms | **1.372 ms** | 0.754 ms | 0 |
+| 128 | 50,281 | 3,016,868 | 2.560 ms | 3.306 ms | 4.098 ms | 2.545 ms | 0 |
+| 256 | 51,558 | 3,093,460 | 4.947 ms | 6.463 ms | 8.720 ms | 4.965 ms | 0 |
+| 512 | 53,171 | 3,190,263 | 9.589 ms | 12.126 ms | 15.726 ms | 9.606 ms | 2,098 |
+
+**Knee at concurrency 32 (42,387 req/s, p99 1.37 ms); peak 53,171 req/s
+(3.19M req/min)**, with the adapter beginning to shed (HTTP 502) at 512.
+
+Every response was validated for contract compliance under load — the driver
+counts an unnormalised 200 as a failure, because the router would.
+
+On novel prompts the model forward dominates as everywhere else: 97 req/s at
+concurrency 8 (p50 81.2 ms), 117 req/s at 32 (p50 275.8 ms).
+
+This number is **not** comparable to the gateway rows above: the adapter only
+classifies, it does not proxy the inference request. It is the cost of asking
+llm-d-sc a question over HTTP, which is the right figure for sizing vLLM SR's
+remote-classifier budget (its default `llm_timeout_seconds: 5`).
+
+## llm-d: the gateway is the ceiling, not the pool
+
+| InferencePool endpoints | req/s | p50 |
+|---:|---:|---:|
+| 1 | 10,294 | 12.10 ms |
+| 2 | 9,864 | 11.35 ms |
+| 3 | 10,489 | 11.62 ms |
+| 6 | 10,109 | 12.37 ms |
+
+**Flat.** Adding endpoints to the pool does not raise throughput, because the
+gateway saturates around 11,300 req/s regardless. The llm-d ladder also goes
+retrograde past its knee — 11,296 req/s at concurrency 256 falls to 9,201 at
+1024 while p50 climbs 22.6 → 109.1 ms.
+
+llm-d context sensitivity is steeper than Praxis's cached path: 9,597 req/s at
+64 B down to 4,179 at 64 KB (−56 %).
+
 ## What is still open
 
 * **llm-d-sc is not yet integrated with llm-d.** The llm-d arm measures the llm-d
   gateway itself (EPP endpoint selection). No integration PR was found in
   `llm-d/llm-d`, `praxis-proxy/praxis`, any `llm-d-incubation` repository, or
   `inference-payload-processor-rs`. The natural insertion point is an ext_proc
-  filter ahead of the EPP; that is implementation work, not benchmarking.
-* **vLLM Semantic Router** — stretch goal, not started.
+  filter ahead of the EPP -- the same shape as the vLLM SR adapter, which is now
+  a working precedent for it.
+* **No PR raised** for the vLLM SR adapter. It works and is benchmarked here, but
+  upstreaming it needs a decision on where the softmax belongs: in an adapter, or
+  as an optional normalised-score mode in llm-d-sc itself.
 * **P5 gateway scaling** is backend-bound past 2 replicas.
 * **No accuracy evaluation** of semantic-cache hits at threshold 0.90.

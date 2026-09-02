@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "l1-direct-c1024",
+  "mode": "http",
+  "targets": [
+    "http://vcr-small.cnuland-dev.svc.cluster.local:8000"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "hit_ratio": 1.0,
+  "keyspace": 1,
+  "run_id": 82527,
+  "warmup_requests": 2000,
+  "measured_requests": 1220891,
+  "wall_secs": 20.001038076,
+  "throughput_rps": 61041.38172033146,
+  "throughput_rpm": 3662482.9032198875,
+  "offered_concurrency": 1024,
+  "implied_mean_ms": 16.77550493027142,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 1220891
+  },
+  "latency": {
+    "count": 1220891,
+    "min_ms": 1.423215,
+    "mean_ms": 16.771629603613263,
+    "stddev_ms": 28.05297356787063,
+    "p50_ms": 14.455414,
+    "p90_ms": 20.222979,
+    "p95_ms": 22.763081,
+    "p99_ms": 28.542956,
+    "p999_ms": 496.419956,
+    "max_ms": 783.651723
+  },
+  "started_unix": 1788382527
+}

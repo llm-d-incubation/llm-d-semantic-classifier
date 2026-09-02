@@ -1,0 +1,25 @@
+[package]
+name = "llm-d-sc-vsr-adapter"
+version = "0.1.0"
+edition = "2021"
+description = "Serves llm-d-sc classifications over vLLM Semantic Router's http_classify contract."
+
+[dependencies]
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "signal"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

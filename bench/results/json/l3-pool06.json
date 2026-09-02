@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "l3-pool06",
+  "mode": "http",
+  "targets": [
+    "http://llmd-bench-gw-istio.cnuland-dev.svc.cluster.local:80"
+  ],
+  "concurrency": 128,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "hit_ratio": 1.0,
+  "keyspace": 1,
+  "run_id": 82788,
+  "warmup_requests": 2000,
+  "measured_requests": 202184,
+  "wall_secs": 20.000686011,
+  "throughput_rps": 10108.853260773287,
+  "throughput_rpm": 606531.1956463972,
+  "offered_concurrency": 128,
+  "implied_mean_ms": 12.662168170616862,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 202184
+  },
+  "latency": {
+    "count": 202184,
+    "min_ms": 3.602596,
+    "mean_ms": 12.644087648795157,
+    "stddev_ms": 8.86678843835915,
+    "p50_ms": 12.366103,
+    "p90_ms": 14.622615,
+    "p95_ms": 15.231538,
+    "p99_ms": 16.918533,
+    "p999_ms": 202.100737,
+    "max_ms": 332.624564
+  },
+  "started_unix": 1788382789
+}

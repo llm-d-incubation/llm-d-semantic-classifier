@@ -110,6 +110,13 @@ def main():
          lambda r: r["label"].replace("l3-", ""),
          "How many endpoints the EPP selects between."),
         ("l4-", "L4 — llm-d soak", lambda r: r["label"].replace("l4-", ""), ""),
+        ("v1-", "V1 — vLLM Semantic Router adapter (http_classify), cached",
+         lambda r: r["label"].replace("v1-vsr-cached-", ""),
+         "llm-d-sc served over vLLM SR's `http_classify` contract. Every response is "
+         "validated to carry the declared labels with scores summing to ~1.0 -- the "
+         "router rejects anything else, so an unnormalised 200 is counted as a failure."),
+        ("v2-", "V2 — vLLM Semantic Router adapter, novel prompts",
+         lambda r: r["label"].replace("v2-vsr-novel-", ""), ""),
     ]:
         rr = sel(rows, pref)
         if rr: d.append(table(rr, "arm", keyf, title, note))

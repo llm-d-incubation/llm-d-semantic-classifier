@@ -1,6 +1,6 @@
 # Round 2 — statistical report (Praxis and llm-d)
 
-Generated from 269 captured runs. Raw per-request samples are retained alongside each arm.
+Generated from 291 captured runs. Raw per-request samples are retained alongside each arm.
 
 Latency is wall-clock round-trip time at the driver: it includes network transit, transport framing, gateway processing, any classification hop, and the backend. Percentiles are nearest-rank, matching `src/bench.rs::percentile`. Mean and standard deviation are reported alongside the distribution, never instead of it.
 
@@ -15,8 +15,8 @@ Latency is wall-clock round-trip time at the driver: it includes network transit
 * **llm-d gateway knee:** concurrency 32 -> 7,641 req/s (458,438 req/min), p99 6.38 ms
 * **llm-d gateway peak:** concurrency 256 -> 11,296 req/s (677,744 req/min)
 
-* **backend direct knee:** concurrency 256 -> 47,589 req/s (2,855,350 req/min), p99 8.08 ms
-* **backend direct peak:** concurrency 256 -> 47,589 req/s (2,855,350 req/min)
+* **backend direct knee:** concurrency 512 -> 58,704 req/s (3,522,247 req/min), p99 14.79 ms
+* **backend direct peak:** concurrency 1024 -> 61,041 req/s (3,662,483 req/min)
 
 
 ### P1 — Praxis: cost of classification across the ladder
@@ -43,6 +43,8 @@ Latency is wall-clock round-trip time at the driver: it includes network transit
 | 64 | 9,162 | 28,390 | -67.7 % | 10.14 ms | 3.36 ms |
 | 128 | 10,752 | 38,889 | -72.4 % | 16.89 ms | 5.97 ms |
 | 256 | 11,296 | 47,589 | -76.3 % | 28.73 ms | 8.08 ms |
+| 512 | 10,647 | 58,704 | -81.9 % | 59.66 ms | 14.79 ms |
+| 1024 | 9,201 | 61,041 | -84.9 % | 129.54 ms | 28.54 ms |
 
 
 ### P1 — Praxis offered-load ladder
@@ -139,6 +141,8 @@ Route-table size is the number of clusters the gateway selects between. All clus
 | direct-c0064 | 28,390 | 1,703,423 | 2.388 | 2.881 | 3.031 | 3.362 | 5.346 | 13.730 | 2.253 | 0.649 | 0 | 0.000 |
 | direct-c0128 | 38,889 | 2,333,330 | 3.151 | 4.859 | 5.287 | 5.969 | 12.426 | 27.118 | 3.291 | 1.186 | 0 | 0.000 |
 | direct-c0256 | 47,589 | 2,855,350 | 5.320 | 6.705 | 7.141 | 8.083 | 16.314 | 69.576 | 5.379 | 1.219 | 0 | 0.000 |
+| direct-c0512 | 58,704 | 3,522,247 | 8.496 | 11.725 | 12.738 | 14.791 | 19.624 | 28.795 | 8.722 | 2.313 | 0 | 0.000 |
+| direct-c1024 | 61,041 | 3,662,483 | 14.455 | 20.223 | 22.763 | 28.543 | 496.420 | 783.652 | 16.772 | 28.053 | 0 | 0.000 |
 | llmd-c0008 | 2,999 | 179,918 | 2.656 | 3.194 | 3.431 | 4.035 | 6.265 | 11.964 | 2.665 | 0.495 | 0 | 0.000 |
 | llmd-c0016 | 5,290 | 317,412 | 2.996 | 3.688 | 3.929 | 4.503 | 6.423 | 12.138 | 3.023 | 0.559 | 0 | 0.000 |
 | llmd-c0032 | 7,641 | 458,438 | 4.128 | 5.198 | 5.552 | 6.382 | 8.748 | 27.038 | 4.187 | 0.842 | 0 | 0.000 |
@@ -146,4 +150,52 @@ Route-table size is the number of clusters the gateway selects between. All clus
 | llmd-c0128 | 10,752 | 645,146 | 12.073 | 14.933 | 15.538 | 16.893 | 21.587 | 27.977 | 11.901 | 2.443 | 0 | 0.000 |
 | llmd-c0256 | 11,296 | 677,744 | 22.551 | 25.195 | 26.080 | 28.730 | 34.855 | 46.437 | 22.657 | 2.134 | 0 | 0.000 |
 | llmd-c0512 | 10,647 | 638,831 | 47.699 | 53.212 | 54.983 | 59.657 | 68.218 | 81.428 | 48.009 | 4.169 | 0 | 0.000 |
+| llmd-c1024 | 9,201 | 552,032 | 109.112 | 120.906 | 123.682 | 129.539 | 137.704 | 281.859 | 109.510 | 10.299 | 0 | 0.000 |
+
+
+### L2 — llm-d context size
+
+| arm | req/s | req/min | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | err % |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| llmd-ctx000064 | 9,597 | 575,808 | 6.585 | 7.846 | 8.236 | 9.193 | 11.886 | 347.384 | 6.667 | 3.992 | 0 | 0.000 |
+| llmd-ctx000256 | 9,456 | 567,345 | 6.620 | 8.899 | 9.435 | 10.657 | 13.241 | 195.631 | 6.747 | 2.914 | 0 | 0.000 |
+| llmd-ctx001024 | 9,408 | 564,460 | 6.663 | 8.226 | 8.851 | 10.301 | 13.003 | 22.546 | 6.801 | 1.162 | 0 | 0.000 |
+| llmd-ctx004096 | 8,943 | 536,597 | 7.058 | 8.870 | 9.441 | 10.831 | 13.102 | 20.475 | 7.153 | 1.344 | 0 | 0.000 |
+| llmd-ctx016384 | 7,440 | 446,382 | 8.510 | 10.603 | 11.280 | 12.814 | 15.057 | 23.045 | 8.598 | 1.569 | 0 | 0.000 |
+| llmd-ctx065536 | 4,179 | 250,767 | 13.265 | 18.596 | 20.749 | 29.559 | 306.391 | 570.055 | 15.326 | 21.605 | 0 | 0.000 |
+
+
+### L3 — llm-d InferencePool size
+
+How many endpoints the EPP selects between.
+
+| arm | req/s | req/min | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | err % |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| pool01 | 10,294 | 617,626 | 12.102 | 14.849 | 15.728 | 17.676 | 21.086 | 301.578 | 12.433 | 7.301 | 0 | 0.000 |
+| pool02 | 9,864 | 591,828 | 11.345 | 13.739 | 14.566 | 18.731 | 427.619 | 843.765 | 12.967 | 30.580 | 0 | 0.000 |
+| pool03 | 10,489 | 629,369 | 11.624 | 13.397 | 14.008 | 15.657 | 291.186 | 446.733 | 12.189 | 14.876 | 0 | 0.000 |
+| pool06 | 10,109 | 606,531 | 12.366 | 14.623 | 15.232 | 16.919 | 202.101 | 332.625 | 12.644 | 8.867 | 0 | 0.000 |
+
+
+### V1 — vLLM Semantic Router adapter (http_classify), cached
+
+llm-d-sc served over vLLM SR's `http_classify` contract. Every response is validated to carry the declared labels with scores summing to ~1.0 -- the router rejects anything else, so an unnormalised 200 is counted as a failure.
+
+| arm | req/s | req/min | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | err % |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| c0008 | 22,671 | 1,360,282 | 0.321 | 0.499 | 0.556 | 0.664 | 1.411 | 6.017 | 0.352 | 0.113 | 0 | 0.000 |
+| c0016 | 32,555 | 1,953,271 | 0.450 | 0.716 | 0.791 | 0.941 | 1.124 | 3.034 | 0.491 | 0.158 | 0 | 0.000 |
+| c0032 | 42,387 | 2,543,243 | 0.713 | 1.049 | 1.157 | 1.372 | 1.700 | 3.871 | 0.754 | 0.212 | 0 | 0.000 |
+| c0064 | 47,151 | 2,829,082 | 1.322 | 1.803 | 1.965 | 2.359 | 3.330 | 6.334 | 1.356 | 0.356 | 0 | 0.000 |
+| c0128 | 50,281 | 3,016,868 | 2.560 | 3.306 | 3.563 | 4.098 | 4.901 | 12.351 | 2.545 | 0.625 | 0 | 0.000 |
+| c0256 | 51,558 | 3,093,460 | 4.947 | 6.463 | 7.132 | 8.720 | 11.801 | 15.285 | 4.965 | 1.288 | 0 | 0.000 |
+| c0512 | 53,171 | 3,190,263 | 9.589 | 12.126 | 13.233 | 15.726 | 18.864 | 24.057 | 9.606 | 2.156 | 2,098 | 0.197 |
+
+
+### V2 — vLLM Semantic Router adapter, novel prompts
+
+| arm | req/s | req/min | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | err % |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| c0008 | 97 | 5,801 | 81.184 | 88.456 | 91.287 | 110.529 | 120.161 | 122.309 | 82.730 | 5.137 | 0 | 0.000 |
+| c0032 | 117 | 7,041 | 275.770 | 295.900 | 304.707 | 364.957 | 387.704 | 401.664 | 272.610 | 24.083 | 0 | 0.000 |
 
