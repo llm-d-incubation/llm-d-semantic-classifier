@@ -1,0 +1,7 @@
+# Derived data. gen_corpus.py is deterministic (seed 20260903), so the GENERATOR
+# plus the seed is the reproducible artifact -- regenerate with:
+#     python3 gen_corpus.py 200000
+# The 200k corpus is ~300 MB, well past GitHub's 100 MB limit, and committing
+# derived data that can be reproduced byte-for-byte adds no evidentiary value.
+corpus.jsonl
+corpus.jsonl.gz

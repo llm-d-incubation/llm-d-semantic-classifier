@@ -16,7 +16,7 @@ import harness as H
 
 CPU = 16            # held constant across every cell
 REPS = 5
-DUR  = 20
+DUR  = 35
 
 def configure(workers, rayon):
     env = [
@@ -35,12 +35,16 @@ def configure(workers, rayon):
     H.sh(H.KCTL+["rollout","status","deployment/llm-d-sc","--timeout=420s"], t=480)
     time.sleep(5)
 
-def one(label, conc):
+def one(label, conc, rep=0):
     """One repetition. Corpus/unique = every request novel: the pure forward path,
     which is what Rayon actually affects."""
     a = H.KCTL+["exec","bench-driver","--","/work/bin/scbench","--mode","grpc",
         "--target",H.SC_SVC,"--concurrency",str(conc),"--connections",str(min(conc,64)),
         "--corpus","/work/corpus.jsonl","--dist","unique",
+        # Disjoint slice per repetition. Repetitions share a process and so a warm
+        # L1 cache; overlapping slices make every repetition after the first a
+        # cache-HIT measurement, which showed up as a CI of [491, 154948].
+        "--corpus-offset",str(rep*30000),
         "--warmup","800","--duration-secs",str(DUR),
         "--run-id",str(int(time.time()*1000)%100000),"--label",label,
         "--out",f"{H.RESULTS}/json/{label}.json"]
@@ -61,8 +65,8 @@ def ci95(xs, n=2000):
     return meds[int(0.025*n)], meds[int(0.975*n)]
 
 if __name__ == "__main__":
-    WORKERS = [1, 2, 4, 8, 16]
-    RAYON   = [1, 2, 4]
+    WORKERS = [1, 4, 16]
+    RAYON   = [1, 4]
     conc    = int(sys.argv[1]) if len(sys.argv)>1 else 32
     cells = [(w, rt) for w in WORKERS for rt in RAYON]
     # Randomised cell order: drift must not align with the matrix.
@@ -75,7 +79,7 @@ if __name__ == "__main__":
         configure(w, rt)
         rps, p50, p99 = [], [], []
         for rep in range(REPS):
-            d = one(f"r3-w{w:02d}-rt{rt:02d}-rep{rep}", conc)
+            d = one(f"r3-w{w:02d}-rt{rt:02d}-rep{rep}", conc, rep)
             if d:
                 rps.append(d['throughput_rps']); p50.append(d['latency']['p50_ms']); p99.append(d['latency']['p99_ms'])
         if not rps: continue

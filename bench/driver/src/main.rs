@@ -83,6 +83,34 @@ struct Args {
     /// Free-form label recorded in the manifest.
     #[arg(long, default_value = "")]
     label: String,
+    /// Frozen utterance corpus (JSONL with a `text` field). When set, prompts are
+    /// drawn from it instead of being synthesised, so the workload exercises real
+    /// semantic variance rather than one filler sentence at a target length.
+    #[arg(long, default_value = "")]
+    corpus: String,
+    /// Start index into the corpus. Distinct offsets give repetitions DISJOINT
+    /// prompt sets, which is required for a novel-prompt arm: repetitions share a
+    /// process and therefore a warm L1 cache, so overlapping slices turn every
+    /// repetition after the first into a cache-hit measurement.
+    #[arg(long, default_value_t = 0)]
+    corpus_offset: u64,
+    /// How the corpus is sampled: uniform | zipf | hotset | unique.
+    /// `unique` walks it once (worst case for caching); `hotset` sends 80% of
+    /// traffic to 20% of utterances; `zipf` is heavy-tailed like real traffic.
+    #[arg(long, default_value = "uniform")]
+    dist: String,
+    /// OPEN-LOOP: target arrival rate in requests/sec, independent of response
+    /// latency. 0 = closed-loop (hold `--concurrency` outstanding).
+    ///
+    /// This distinction decides what the benchmark can observe. A closed-loop
+    /// client slows down when latency rises, which HIDES queue explosion; an
+    /// open-loop generator keeps offering work and lets the queue grow, which is
+    /// the only way to see a true saturation knee.
+    #[arg(long, default_value_t = 0.0)]
+    rate: f64,
+    /// Arrival process for open-loop mode: constant | poisson.
+    #[arg(long, default_value = "poisson")]
+    arrival: String,
     /// gRPC ContextCompleteness: 0=UNSPECIFIED, 1=FULL, 2=DELTA.
     /// DELTA must short-circuit to ABSTAIN before any cache or model work, which
     /// is the behaviour PR #23 introduced and this flag exists to verify.
@@ -91,6 +119,49 @@ struct Args {
     /// Model name sent in http mode.
     #[arg(long, default_value = "router-model")]
     model: String,
+}
+
+/// Load a frozen JSONL corpus. One `text` field per line.
+fn load_corpus(path: &str) -> Vec<String> {
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
+    raw.lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| v.get("text").and_then(|t| t.as_str()).map(|s| s.to_string()))
+        .collect()
+}
+
+/// Pick an index into the corpus under the requested distribution.
+///
+/// Deterministic in `i` (a hash, not an RNG) so two runs with identical
+/// parameters draw the identical sequence and are directly comparable.
+fn corpus_index(dist: &str, i: u64, n: u64, offset: u64) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    let i = i.wrapping_add(offset);
+    let mut z = i.wrapping_mul(0x9E3779B97F4A7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    let u = ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64;
+    match dist {
+        // Walk the corpus once: every request novel, the adversarial cache case.
+        // NOTE: this wraps at the corpus size. A run that issues more requests
+        // than the corpus holds stops being novel and silently becomes a
+        // cache-hit measurement, so the caller must size the corpus above the
+        // expected request count (enforced as a premise below).
+        "unique" => i % n,
+        // 80% of traffic into 20% of the corpus.
+        "hotset" => {
+            let hot = (n as f64 * 0.2).max(1.0) as u64;
+            if u < 0.8 { z % hot } else { hot + (z % (n - hot).max(1)) }
+        }
+        // Heavy-tailed: rank ~ n^u gives a Zipf-like skew without a table.
+        "zipf" => {
+            let r = (n as f64).powf(u);
+            (r as u64).min(n - 1)
+        }
+        _ => z % n,
+    }
 }
 
 /// Deterministic prompt of `bytes` length. Real words so the tokenizer does
@@ -227,6 +298,20 @@ struct Report {
     /// offered session rate the transport actually sustained.
     throughput_rpm: f64,
     offered_concurrency: usize,
+    /// closed-loop | open-loop-constant | open-loop-poisson
+    load_mode: String,
+    /// Open-loop only: requested arrival rate.
+    offered_rate_rps: f64,
+    /// Open-loop only: achieved / offered. Below ~0.98 the generator could not
+    /// keep up, so the arm measured the DRIVER and must not be published.
+    rate_attainment: f64,
+    corpus: String,
+    dist: String,
+    /// Premise assertions, persisted HERE in the canonical result rather than in
+    /// a side file, so the archive can prove what passed. Report generation
+    /// refuses any arm with premises_passed=false.
+    premises_passed: bool,
+    premise_notes: Vec<String>,
     /// Little's law check: concurrency / throughput. Should track mean latency;
     /// a large divergence means the driver, not the target, was the limiter.
     implied_mean_ms: f64,
@@ -296,6 +381,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .pool_max_idle_per_host(args.connections)
     .build_http::<http_body_util::Full<bytes::Bytes>>();
 
+    let corpus: Arc<Vec<String>> = Arc::new(if args.corpus.is_empty() {
+        Vec::new()
+    } else {
+        let c = load_corpus(&args.corpus);
+        eprintln!("scbench: corpus {} -> {} utterances, dist={}", args.corpus, c.len(), args.dist);
+        c
+    });
+
+    // OPEN-LOOP: a shared ticket dispenser paced by wall clock. Workers take a
+    // ticket only when the schedule says a request is DUE, so the offered rate is
+    // independent of how long responses take. In closed-loop mode this is unused
+    // and each worker simply issues the next request on completion.
+    let open_loop = args.rate > 0.0;
+    let due = Arc::new(AtomicU64::new(0));
+    let t_origin = Instant::now();
+
     let mut handles = Vec::new();
     let samples: Arc<std::sync::Mutex<Vec<(u64, u8)>>> =
         Arc::new(std::sync::Mutex::new(Vec::with_capacity(1 << 20)));
@@ -317,6 +418,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let http_client = http_client.clone();
         let target = targets[w % targets.len()].clone();
+        let corpus = corpus.clone();
+        let due = due.clone();
 
         handles.push(tokio::spawn(async move {
             let mut grpc = chan.map(ClassifyClient::new);
@@ -325,6 +428,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             loop {
                 if stop.load(Ordering::Relaxed) {
                     break;
+                }
+                if open_loop {
+                    // Claim the next scheduled slot and wait until it is due.
+                    // Poisson spacing uses inverse-transform sampling on an
+                    // exponential, which is what makes the arrival process
+                    // memoryless rather than merely jittered.
+                    let slot = due.fetch_add(1, Ordering::Relaxed);
+                    let mean_gap = 1.0 / args.rate;
+                    let offset = if args.arrival == "constant" {
+                        slot as f64 * mean_gap
+                    } else {
+                        let mut z = slot.wrapping_mul(0x9E3779B97F4A7C15);
+                        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+                        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+                        let u = (((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64)
+                            .max(1e-12);
+                        // Sum of exponentials approximated by mean spacing plus
+                        // this slot's exponential deviate; keeps the long-run
+                        // rate exact while the gaps stay memoryless.
+                        slot as f64 * mean_gap + (-u.ln() - 1.0) * mean_gap
+                    };
+                    let target_t = Duration::from_secs_f64(offset.max(0.0));
+                    let now = t_origin.elapsed();
+                    if target_t > now {
+                        tokio::time::sleep(target_t - now).await;
+                    }
                 }
                 let is_measuring = measuring.load(Ordering::Relaxed);
                 // In mixed mode the warmup must POPULATE the warm keyspace, or
@@ -338,8 +467,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     warm_done.fetch_add(1, Ordering::Relaxed) as u64
                 };
-                let ctx = context_for_mix(&args.cache_mode, args.run_id, idx, args.keyspace, is_measuring, args.hit_ratio);
-                let prompt = make_prompt(&ctx, args.context_bytes);
+                let (ctx, prompt) = if !corpus.is_empty() {
+                    // Corpus mode: the utterance IS the prompt. Cache behaviour
+                    // then comes from the sampling distribution rather than from
+                    // a synthetic key, which is the realistic arrangement.
+                    let ci = corpus_index(&args.dist, idx, corpus.len() as u64, args.corpus_offset) as usize;
+                    let mut text = corpus[ci].clone();
+                    if args.context_bytes > 0 {
+                        // Pad with FURTHER corpus utterances rather than filler:
+                        // a long prompt should still look like language, and
+                        // repeating one filler sentence collapses every long
+                        // prompt into the same embedding neighbourhood.
+                        let mut k = ci;
+                        while text.len() < args.context_bytes {
+                            k = (k + 7919) % corpus.len();
+                            text.push(' ');
+                            text.push_str(&corpus[k]);
+                        }
+                        if text.len() > args.context_bytes {
+                            let mut cut = args.context_bytes;
+                            while cut > 0 && !text.is_char_boundary(cut) { cut -= 1; }
+                            text.truncate(cut);
+                        }
+                    }
+                    (format!("corpus-{ci}"), text)
+                } else {
+                    let c = context_for_mix(&args.cache_mode, args.run_id, idx,
+                                            args.keyspace, is_measuring, args.hit_ratio);
+                    let p = make_prompt(&c, args.context_bytes);
+                    (c, p)
+                };
+                let _ = &ctx;
 
                 let t0 = Instant::now();
                 let (ok, status): (bool, String) = if let Some(c) = grpc.as_mut() {
@@ -535,6 +693,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         throughput_rps: rps,
         throughput_rpm: rps * 60.0,
         offered_concurrency: args.concurrency,
+        load_mode: if open_loop {
+            format!("open-loop-{}", args.arrival)
+        } else {
+            "closed-loop".to_string()
+        },
+        offered_rate_rps: args.rate,
+        rate_attainment: if open_loop && args.rate > 0.0 {
+            (ok_count as f64 / wall.max(1e-9)) / args.rate
+        } else {
+            1.0
+        },
+        corpus: args.corpus.clone(),
+        dist: args.dist.clone(),
+        premises_passed: true,
+        premise_notes: Vec::new(),
         implied_mean_ms: if rps > 0.0 {
             (args.concurrency as f64 / rps) * 1000.0
         } else {
@@ -550,6 +723,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         latency: lat,
         started_unix: started,
     };
+
+    // Enforce the premises the DRIVER can verify, and record them in the
+    // canonical JSON. Round 2 computed these into a side file that was never
+    // archived, so the evidence could not demonstrate what had been validated.
+    let mut report = report;
+    let mut notes: Vec<String> = Vec::new();
+    if open_loop && report.rate_attainment < 0.98 {
+        if report.error_rate_pct > 5.0 {
+            notes.push(format!(
+                "rate attainment {:.3} with {:.1}% errors ({:?}): the target REJECTED \
+                 the load -- diagnose the errors, not the generator",
+                report.rate_attainment, report.error_rate_pct, report.status_counts));
+        } else {
+            notes.push(format!(
+                "rate attainment {:.3} < 0.98 at {:.0}% errors: the generator could not \
+                 sustain {} rps, so this arm measures the DRIVER, not the target",
+                report.rate_attainment, report.error_rate_pct, args.rate));
+        }
+    }
+    if !open_loop {
+        // Little's law cross-check: concurrency/throughput must track the
+        // measured mean. A large divergence means the driver was the limiter.
+        let m = report.latency.mean_ms;
+        if m > 0.0 {
+            let ratio = report.implied_mean_ms / m;
+            if !(0.7..=1.4).contains(&ratio) {
+                notes.push(format!(
+                    "Little's law divergence: implied mean {:.3}ms vs measured {:.3}ms \
+                     (ratio {:.2}) -- driver may be the limiter",
+                    report.implied_mean_ms, m, ratio));
+            }
+        }
+    }
+    if args.dist == "unique" && !corpus.is_empty()
+        && report.measured_requests > corpus.len() as u64 {
+        notes.push(format!(
+            "dist=unique issued {} requests against a {}-utterance corpus: it \
+             wrapped {:.1}x, so most requests were REPEATS and this arm measures \
+             the cache-hit path, not novel prompts",
+            report.measured_requests, corpus.len(),
+            report.measured_requests as f64 / corpus.len() as f64));
+    }
+    if report.measured_requests < 200 {
+        notes.push(format!("only {} measured requests: percentiles beyond p90 are \
+                            not determined", report.measured_requests));
+    }
+    report.premises_passed = notes.is_empty();
+    report.premise_notes = notes;
+    if !report.premises_passed {
+        for n in &report.premise_notes {
+            eprintln!("scbench: PREMISE FAILED: {n}");
+        }
+    }
 
     let json = serde_json::to_string_pretty(&report)?;
     if args.out.is_empty() {

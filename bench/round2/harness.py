@@ -38,6 +38,13 @@ def configure_sc(workers=16, replicas=1, classifier="complexity", cache="exact",
         {"name": "LLM_D_SC_MODEL_DIR", "value": "/work/models"},
         {"name": "LLM_D_SC_LISTEN", "value": "0.0.0.0:50051"},
         {"name": "LLM_D_SC_REDIS_URL", "value": "redis://redis.cnuland-dev.svc.cluster.local:6379"},
+        # Pinned from round 3's controlled matrix. Left unset, Rayon sizes its
+        # global pool to the CPU limit and collides with the executor pool --
+        # intra-op parallelism fighting inter-op parallelism. RT=1 measured 2.44x
+        # RT=4 on realistic novel traffic (266.3 vs 109.1 req/s) and 6.65x the
+        # unset default in the isolated sweep. Setting it explicitly also makes
+        # the variable CONTROLLED rather than an artefact of the CPU limit.
+        {"name": "RAYON_NUM_THREADS", "value": os.environ.get("R3_RAYON", "1")},
     ]
     patch = {"spec": {"template": {"spec": {"containers": [{
         "name": "llm-d-sc", "env": env,
