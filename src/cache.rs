@@ -29,6 +29,10 @@ pub mod breaker;
 pub mod redis;
 #[cfg(feature = "redis-semantic")]
 pub mod redis_codec;
+// Semantic cache for full LLM responses (playground/gateway use). Reuses the
+// RediSearch vector-KNN machinery in a separate index/namespace.
+#[cfg(feature = "redis-semantic")]
+pub mod response;
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

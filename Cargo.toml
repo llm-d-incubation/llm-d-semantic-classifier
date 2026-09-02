@@ -60,6 +60,11 @@ r2d2 = { version = "0.8.10", optional = true }
 # Pure-Rust, dependency-light HTTP server used ONLY by the demo playground
 # binary (feature `playground`). Never compiled into the default build.
 tiny_http = { version = "0.12", optional = true }
+# Blocking HTTP *client* used ONLY by the playground/gateway to forward
+# chat-completion requests upstream to vLLM on a response-cache miss. TLS is
+# dropped (default-features = false): the upstream is a plaintext in-cluster
+# service, so no rustls/native-tls toolchain is pulled in.
+ureq = { version = "2", default-features = false, optional = true }
 
 [features]
 # Enables the Redis-backed semantic (L2) cache tier. Requires rustc >= 1.80.
@@ -67,7 +72,7 @@ redis-semantic = ["dep:redis", "dep:r2d2"]
 # Builds the interactive demo playground binary (llm-d-sc-playground): a local
 # web UI over the real classifier + semantic cache. Implies redis-semantic, so
 # it also requires rustc >= 1.80.
-playground = ["redis-semantic", "dep:tiny_http"]
+playground = ["redis-semantic", "dep:tiny_http", "dep:ureq"]
 
 [build-dependencies]
 tonic-prost-build = "0.14"

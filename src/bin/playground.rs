@@ -21,15 +21,27 @@
 //! exactly one classify call.
 //!
 //! Served surface (plain HTTP over `tiny_http`, same-origin, no framework):
-//!   GET  /              -> the single-page UI (embedded at build time)
-//!   GET  /api/info      -> available classifiers (id + taxonomy + totals) + cache
-//!   POST /api/classify  -> { "text": "...", "classifier": "..." }
-//!                          -> ranked labels + cache tier + latency
+//!   GET  /                    -> the single-page UI (embedded at build time)
+//!   GET  /api/info            -> available classifiers (id + taxonomy + totals) + cache
+//!   POST /api/classify        -> { "text": "...", "classifier": "..." }
+//!                                -> ranked labels + cache tier + latency
+//!   POST /v1/chat/completions -> OpenAI-compatible chat completion, served
+//!                                through the semantic RESPONSE cache: a
+//!                                near-duplicate prompt to the same model is
+//!                                answered from Redis (header `x-praxis-cache:
+//!                                hit`); a miss is forwarded to the upstream vLLM
+//!                                (`LLM_D_SC_VLLM_URL`), returned, and cached
+//!                                (`miss`). `stream:true` bypasses the cache
+//!                                (`bypass`). Only active when both
+//!                                `LLM_D_SC_VLLM_URL` and a Redis semantic cache
+//!                                are configured.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use llm_d_sc::cache::response::RedisResponseCache;
 use llm_d_sc::classify::{CandleClassifier, ClassifierRuntime};
 use llm_d_sc::config::CacheConfig;
+use llm_d_sc::embedding::Embedder;
 use llm_d_sc::grpc::classify::{ClassifyClient, ClassifyRequest, ClassifyServer};
 use llm_d_sc::metrics::MetricsSnapshot;
 use llm_d_sc::taxonomy::ClassifierDefinition;
@@ -57,6 +69,18 @@ struct Classifier {
     server: ClassifyServer,
     client: ClassifyClient,
     baseline: MetricsSnapshot,
+}
+
+/// State for the semantic RESPONSE-cache route (`/v1/chat/completions`): an
+/// embedder to key completions by prompt similarity, the Redis-backed response
+/// cache, and the upstream vLLM to forward misses to. Present only when both an
+/// upstream and a Redis cache are configured.
+struct ResponseCacheCtx {
+    embedder: Embedder,
+    cache: RedisResponseCache,
+    vllm_url: String,
+    threshold: f32,
+    upstream_timeout: Duration,
 }
 
 fn main() -> std::io::Result<()> {
@@ -109,6 +133,21 @@ fn main() -> std::io::Result<()> {
         timeout_ms: 50,
     });
 
+    // Optional semantic RESPONSE cache in front of an upstream vLLM. Active only
+    // when both LLM_D_SC_VLLM_URL and a Redis backend are configured; otherwise
+    // the /v1/chat/completions route is disabled (404). Keys completions by
+    // prompt similarity using its own embedder (the primary classifier's model).
+    let response_cache = build_response_cache(&models_dir, &cache_cfg);
+    match &response_cache {
+        Some(ctx) => eprintln!(
+            "llm-d-sc playground: response cache ENABLED -> upstream {} (threshold {:.2})",
+            ctx.vllm_url, ctx.threshold
+        ),
+        None => eprintln!(
+            "llm-d-sc playground: response cache disabled (set LLM_D_SC_VLLM_URL + a redis-semantic cache to enable)"
+        ),
+    }
+
     let http = tiny_http::Server::http(&ui_addr).map_err(|e| {
         std::io::Error::other(format!("could not bind playground UI on {ui_addr}: {e}"))
     })?;
@@ -130,6 +169,9 @@ fn main() -> std::io::Result<()> {
         let method = request.method().clone();
         let url = request.url().to_string();
 
+        // Extra response headers set by a route (e.g. the response-cache tier).
+        let mut extra_headers: Vec<tiny_http::Header> = Vec::new();
+
         let (status, content_type, body): (u16, &str, String) = match (method, url.as_str()) {
             (tiny_http::Method::Get, "/") => {
                 (200, "text/html; charset=utf-8", INDEX_HTML.to_string())
@@ -145,14 +187,33 @@ fn main() -> std::io::Result<()> {
                     Err(msg) => (200, "application/json", error_json(&msg)),
                 }
             }
+            (tiny_http::Method::Post, "/v1/chat/completions") => {
+                let mut raw = String::new();
+                let _ = request.as_reader().read_to_string(&mut raw);
+                match handle_chat(response_cache.as_ref(), &raw) {
+                    Ok((code, cache_status, json)) => {
+                        if let Ok(h) = tiny_http::Header::from_bytes(
+                            &b"x-praxis-cache"[..],
+                            cache_status.as_bytes(),
+                        ) {
+                            extra_headers.push(h);
+                        }
+                        (code, "application/json", json)
+                    }
+                    Err(msg) => (502, "application/json", error_json(&msg)),
+                }
+            }
             _ => (404, "text/plain", "not found".to_string()),
         };
 
         let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes())
             .expect("static content-type header is valid");
-        let response = tiny_http::Response::from_string(body)
+        let mut response = tiny_http::Response::from_string(body)
             .with_status_code(status)
             .with_header(header);
+        for h in extra_headers {
+            response = response.with_header(h);
+        }
         let _ = request.respond(response);
     }
 
@@ -375,4 +436,184 @@ fn info_json(classifiers: &[Classifier], cfg: &CacheConfig) -> String {
 
 fn error_json(message: &str) -> String {
     serde_json::json!({ "error": message }).to_string()
+}
+
+/// Build the response-cache context if both an upstream vLLM URL and a Redis
+/// semantic backend are configured. Any load/connect failure logs and disables
+/// the route (returns `None`) rather than aborting the playground.
+fn build_response_cache(models_dir: &str, cache_cfg: &CacheConfig) -> Option<ResponseCacheCtx> {
+    let vllm_url = std::env::var("LLM_D_SC_VLLM_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())?;
+    let redis_url = cache_cfg.redis_url.clone()?;
+
+    let threshold = std::env::var("LLM_D_SC_RESP_CACHE_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.92);
+    let ttl_secs = std::env::var("LLM_D_SC_RESP_CACHE_TTL")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(cache_cfg.ttl_secs);
+    // The classification cache's timeout (LLM_D_SC_TIMEOUT_MS, default 50ms) is
+    // too tight for a vector-KNN FT.SEARCH: the first (cold) search or a fresh
+    // pooled connection can exceed it, and a timed-out lookup fails open to a
+    // false miss. Use a dedicated, more generous bound (warm lookups are still
+    // single-digit ms; this only caps the cold/slow path).
+    let timeout_ms = std::env::var("LLM_D_SC_RESP_CACHE_TIMEOUT_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(1000);
+
+    // The response cache keys completions by SEMANTIC similarity, so it needs a
+    // general sentence-embedding model — NOT a task-tuned classifier model.
+    // Classifier embeddings are anisotropic: unrelated prompts score ~0.97 and a
+    // true paraphrase can score *lower* than an unrelated one, so an absolute
+    // cosine threshold is meaningless there. Default to the baked all-MiniLM-L6-v2
+    // baseline (clean separation: paraphrase ~0.99, unrelated ~0.75); override
+    // with LLM_D_SC_RESP_EMBED_DIR.
+    let embed_dir = std::env::var("LLM_D_SC_RESP_EMBED_DIR")
+        .unwrap_or_else(|_| format!("{models_dir}/baseline-minilm"));
+    let embedder = Embedder::load(
+        format!("{embed_dir}/config.json"),
+        format!("{embed_dir}/model.safetensors"),
+        format!("{embed_dir}/tokenizer.json"),
+        format!("{embed_dir}/1_Pooling/config.json"),
+    )
+    .map_err(|e| {
+        eprintln!(
+            "llm-d-sc playground: response cache disabled — embedder load failed at {embed_dir}: {e:?}"
+        )
+    })
+    .ok()?;
+
+    let cache = RedisResponseCache::connect(&redis_url, threshold, ttl_secs, timeout_ms)
+        .map_err(|e| {
+            eprintln!("llm-d-sc playground: response cache disabled — redis connect failed: {e}")
+        })
+        .ok()?;
+
+    Some(ResponseCacheCtx {
+        embedder,
+        cache,
+        vllm_url,
+        threshold,
+        upstream_timeout: Duration::from_secs(120),
+    })
+}
+
+/// Serve one chat-completion request through the semantic response cache.
+///
+/// Returns `(http_status, cache_status, body_json)` where `cache_status` is
+/// "hit" (served from Redis), "miss" (forwarded upstream then cached), or
+/// "bypass" (streaming or non-embeddable prompt: forwarded, not cached).
+fn handle_chat(
+    ctx: Option<&ResponseCacheCtx>,
+    raw: &str,
+) -> Result<(u16, &'static str, String), String> {
+    let ctx = ctx.ok_or("response cache route is disabled (LLM_D_SC_VLLM_URL not set)")?;
+    let req: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| "request body must be JSON".to_string())?;
+
+    let stream = req.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let model = req
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Cache only non-streaming requests whose last user message is a plain
+    // string we can embed. Everything else is forwarded transparently.
+    if !stream {
+        if let Some(text) = last_user_message(&req) {
+            if let Ok(vector) = ctx.embedder.embed(&text) {
+                if let Some(hit) = ctx.cache.lookup(&vector, &model) {
+                    return Ok((200, "hit", hit));
+                }
+                let (code, body) = forward_upstream(&ctx.vllm_url, raw, ctx.upstream_timeout)?;
+                if code == 200 {
+                    ctx.cache.insert(&vector, &model, &body);
+                }
+                return Ok((code, "miss", body));
+            }
+        }
+    }
+
+    let (code, body) = forward_upstream(&ctx.vllm_url, raw, ctx.upstream_timeout)?;
+    Ok((code, "bypass", body))
+}
+
+/// Forward a chat-completion request body to the upstream vLLM and return
+/// `(status, body)`. HTTP error statuses (4xx/5xx) are returned as-is so the
+/// caller sees the real upstream error; only transport failures are `Err`.
+fn forward_upstream(base: &str, body: &str, timeout: Duration) -> Result<(u16, String), String> {
+    let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+    match ureq::post(&url)
+        .timeout(timeout)
+        .set("Content-Type", "application/json")
+        .send_string(body)
+    {
+        Ok(r) => {
+            let code = r.status();
+            let text = r
+                .into_string()
+                .map_err(|e| format!("reading upstream body: {e}"))?;
+            Ok((code, text))
+        }
+        Err(ureq::Error::Status(code, r)) => Ok((code, r.into_string().unwrap_or_default())),
+        Err(e) => Err(format!("upstream request failed: {e}")),
+    }
+}
+
+/// The most recent `role:"user"` message's string content, if present. Array /
+/// multimodal content is not embeddable here and yields `None` (bypass).
+fn last_user_message(req: &serde_json::Value) -> Option<String> {
+    req.get("messages")?
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_user_message_picks_the_final_user_turn() {
+        let req = serde_json::json!({
+            "messages": [
+                {"role": "system", "content": "be brief"},
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "reply"},
+                {"role": "user", "content": "second"}
+            ]
+        });
+        assert_eq!(last_user_message(&req).as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn last_user_message_is_none_without_user_turn() {
+        let req = serde_json::json!({"messages": [{"role": "system", "content": "x"}]});
+        assert!(last_user_message(&req).is_none());
+    }
+
+    #[test]
+    fn last_user_message_is_none_for_array_content() {
+        // Multimodal content is an array, not a string, and is not embeddable.
+        let req = serde_json::json!({
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        });
+        assert!(last_user_message(&req).is_none());
+    }
+
+    #[test]
+    fn handle_chat_errors_when_disabled() {
+        let out = handle_chat(None, "{}");
+        assert!(out.is_err());
+    }
 }
