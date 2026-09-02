@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use llm_d_sc::classify::{
     CandleClassifier, ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError,
-    ClassifyStatus, RankedSignal, RuntimeMetadata, ServiceCore,
+    ClassifyStatus, Embedding, RankedSignal, RuntimeMetadata, ServiceCore,
 };
 use llm_d_sc::metrics::Metrics;
 use llm_d_sc::taxonomy::ClassifierDefinition;
@@ -53,10 +53,20 @@ fn input(text: &str) -> ClassificationInput {
 struct SlowRuntime;
 
 impl ClassifierRuntime for SlowRuntime {
-    fn classify(&self, _input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
-        // Hold the forward open so concurrent callers see the in-flight
-        // slot rather than finding the result already cached.
+    // The slow model forward runs in `embed`. `ServiceCore` drives the runtime
+    // as `embed` then `rank`, so holding the forward open here keeps concurrent
+    // callers on the in-flight slot rather than finding the result already
+    // cached — which is exactly what makes coalescing deterministic.
+    fn embed(&self, _input: &ClassificationInput) -> Result<Embedding, ClassifyError> {
         std::thread::sleep(Duration::from_millis(250));
+        Ok(Embedding::new(vec![0.0]))
+    }
+
+    fn rank(
+        &self,
+        _embedding: &Embedding,
+        _input: &ClassificationInput,
+    ) -> Result<ClassificationResult, ClassifyError> {
         Ok(ClassificationResult {
             classifier_id: "slow".into(),
             model_revision: "rev".into(),

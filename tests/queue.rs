@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use llm_d_sc::classify::{
     ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, ClassifyStatus,
-    RankedSignal, RuntimeMetadata,
+    Embedding, RankedSignal, RuntimeMetadata,
 };
 use llm_d_sc::grpc::classify::generated;
 use llm_d_sc::grpc::classify::ClassifyServiceImpl;
@@ -52,9 +52,20 @@ impl ClassifierRuntime for SlowClassifier {
         }
     }
 
-    fn classify(&self, input: ClassificationInput) -> Result<ClassificationResult, ClassifyError> {
+    // The slow model forward runs in `embed` — on the dedicated inference
+    // executor thread — so admitted work stays in-flight and the bounded queue
+    // saturates. `ServiceCore` drives the runtime as `embed` then `rank`, so the
+    // delay must live here rather than in `classify`.
+    fn embed(&self, _input: &ClassificationInput) -> Result<Embedding, ClassifyError> {
         std::thread::sleep(self.forward_delay);
-        let _ = input;
+        Ok(Embedding::new(vec![0.0]))
+    }
+
+    fn rank(
+        &self,
+        _embedding: &Embedding,
+        _input: &ClassificationInput,
+    ) -> Result<ClassificationResult, ClassifyError> {
         Ok(ClassificationResult {
             classifier_id: "slow-classifier".to_string(),
             model_revision: "slow-model".to_string(),

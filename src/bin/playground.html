@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>llm-d-sc · Semantic Cache Playground</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --panel: #131a26;
+    --panel-2: #0f1520;
+    --border: #223049;
+    --text: #e6edf7;
+    --muted: #8ea0bd;
+    --accent: #6ea8fe;
+    --miss: #f5a524;
+    --l1: #4c8dff;
+    --l2: #2ecc71;
+    --degraded: #ff6b6b;
+    --shadow: 0 10px 30px rgba(0,0,0,.35);
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: radial-gradient(1200px 600px at 80% -10%, #1a2333 0%, var(--bg) 55%) fixed;
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 80px; }
+  header.hero { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  .logo {
+    font-weight: 700; font-size: 22px; letter-spacing: .2px;
+    background: linear-gradient(90deg, var(--accent), var(--l2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .subtitle { color: var(--muted); font-size: 14px; }
+  .tagline { color: var(--muted); margin: 4px 0 26px; max-width: 720px; }
+  .grid { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 18px;
+  }
+  .card + .card { margin-top: 20px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  .picker { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .picker label { color: var(--muted); font-size: 13px; }
+  select {
+    background: #0a0e16; color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 9px 12px; font: inherit; outline: none; cursor: pointer;
+    min-width: 180px;
+  }
+  select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,254,.15); }
+  .taxonomy { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  textarea {
+    width: 100%; min-height: 84px; resize: vertical; padding: 12px 14px;
+    background: #0a0e16; color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; font: inherit; outline: none;
+  }
+  textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,254,.15); }
+  .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  button.primary {
+    background: linear-gradient(90deg, var(--accent), #4c8dff);
+    color: #06101f; border: 0; padding: 11px 20px; border-radius: 10px;
+    font-weight: 700; cursor: pointer; font-size: 14px;
+  }
+  button.primary:disabled { opacity: .55; cursor: default; }
+  button.ghost {
+    background: #0d1420; color: var(--text); border: 1px solid var(--border);
+    padding: 8px 12px; border-radius: 999px; cursor: pointer; font-size: 13px;
+  }
+  button.ghost:hover { border-color: var(--accent); color: #fff; }
+  .examples { margin-top: 16px; }
+  .examples .lbl { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 12px; border-radius: 999px; font-weight: 700; font-size: 13px;
+    border: 1px solid transparent;
+  }
+  .badge .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .b-miss { background: rgba(245,165,36,.12); color: var(--miss); border-color: rgba(245,165,36,.35); }
+  .b-miss .dot { background: var(--miss); }
+  .b-l1 { background: rgba(76,141,255,.12); color: var(--l1); border-color: rgba(76,141,255,.35); }
+  .b-l1 .dot { background: var(--l1); }
+  .b-l2 { background: rgba(46,204,113,.12); color: var(--l2); border-color: rgba(46,204,113,.35); }
+  .b-l2 .dot { background: var(--l2); }
+  .b-degraded { background: rgba(255,107,107,.12); color: var(--degraded); border-color: rgba(255,107,107,.35); }
+  .b-degraded .dot { background: var(--degraded); }
+
+  .result-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .latency { font-variant-numeric: tabular-nums; color: var(--text); font-weight: 700; }
+  .latency small { color: var(--muted); font-weight: 500; }
+  .provenance { color: var(--muted); font-size: 12px; margin: 10px 0 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+
+  .bars { margin-top: 14px; display: grid; gap: 8px; }
+  .bar-row { display: grid; grid-template-columns: 130px 1fr 64px; align-items: center; gap: 10px; }
+  .bar-row .name { font-weight: 600; font-size: 13px; }
+  .bar-row.top .name { color: var(--accent); }
+  .track { background: #0a0e16; border: 1px solid var(--border); border-radius: 8px; height: 16px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 7px; background: linear-gradient(90deg, #35507f, var(--accent)); transition: width .4s ease; }
+  .bar-row.top .fill { background: linear-gradient(90deg, #1f7a46, var(--l2)); }
+  .score { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+
+  .empty { color: var(--muted); padding: 28px 6px; text-align: center; }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat { background: #0c131f; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  .stat .n { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; margin-top: 2px; }
+  .stat.l1 .n { color: var(--l1); } .stat.l2 .n { color: var(--l2); }
+  .stat.miss .n { color: var(--miss); } .stat.degraded .n { color: var(--degraded); }
+  .stats-note { color: var(--muted); font-size: 11px; margin: 10px 0 0; }
+
+  .legend { color: var(--muted); font-size: 12px; margin-top: 14px; display: grid; gap: 6px; }
+  .legend .li { display: flex; gap: 8px; align-items: flex-start; }
+  .legend .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; flex: 0 0 auto; }
+
+  .timeline { display: grid; gap: 8px; max-height: 360px; overflow: auto; }
+  .tl-item { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center;
+    background: #0c131f; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .tl-item .q { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tl-item .meta { display: flex; gap: 10px; align-items: center; }
+  .tl-item .clf { color: var(--accent); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  .tl-item .toplabel { color: var(--muted); font-size: 12px; }
+  .tl-item .lat { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tl-badge { font-size: 11px; padding: 3px 8px; border-radius: 999px; font-weight: 700; }
+
+  .err { color: var(--degraded); font-size: 13px; margin-top: 10px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <span class="logo">llm-d-sc</span>
+    <span class="subtitle">Semantic Cache Playground</span>
+  </header>
+  <p class="tagline">
+    Pick a classifier, classify a prompt, then send a <em>paraphrase</em>. On an exact-cache miss the prompt is
+    embedded and a semantically similar prior prompt reuses its stored label &mdash; an <strong>L2 semantic hit</strong>
+    &mdash; instead of re-ranking. Re-send the identical text for an <strong>L1 exact hit</strong>. Each classifier
+    keeps its own isolated cache.
+  </p>
+
+  <div class="grid">
+    <div class="col-main">
+      <div class="card">
+        <div class="picker">
+          <label for="classifier">Classifier</label>
+          <select id="classifier"></select>
+          <span class="taxonomy" id="taxonomy"></span>
+        </div>
+        <h2>Prompt</h2>
+        <textarea id="prompt" placeholder="e.g. What is the capital of France?"></textarea>
+        <div class="row">
+          <button class="primary" id="go">Classify</button>
+          <span class="hint" id="statusline"></span>
+        </div>
+        <div class="examples">
+          <div class="lbl">Try these in order &mdash; watch #2 and #3 become L2 semantic hits:</div>
+          <div class="chips" id="chips"></div>
+        </div>
+        <div class="err" id="err"></div>
+      </div>
+
+      <div class="card" id="resultCard" style="display:none">
+        <div class="result-head">
+          <span class="badge" id="tierBadge"><span class="dot"></span><span id="tierText"></span></span>
+          <span class="latency"><span id="lat"></span><small> ms round-trip</small></span>
+        </div>
+        <div class="provenance" id="prov"></div>
+        <div class="bars" id="bars"></div>
+      </div>
+
+      <div class="card">
+        <h2>History</h2>
+        <div class="timeline" id="timeline"><div class="empty">No requests yet.</div></div>
+      </div>
+    </div>
+
+    <div class="col-side">
+      <div class="card">
+        <h2>Cache totals</h2>
+        <div class="stats">
+          <div class="stat l1"><div class="n" id="s-l1">0</div><div class="k">L1 exact hits</div></div>
+          <div class="stat l2"><div class="n" id="s-l2">0</div><div class="k">L2 semantic hits</div></div>
+          <div class="stat miss"><div class="n" id="s-miss">0</div><div class="k">Compute misses</div></div>
+          <div class="stat degraded"><div class="n" id="s-degraded">0</div><div class="k">Degraded</div></div>
+        </div>
+        <p class="stats-note" id="statsNote">Totals for the selected classifier.</p>
+        <div class="legend">
+          <div class="li"><span class="dot" style="background:var(--miss)"></span><span><strong>Compute miss</strong> &mdash; no cached match; ran the model forward and stored the result.</span></div>
+          <div class="li"><span class="dot" style="background:var(--l1)"></span><span><strong>L1 exact hit</strong> &mdash; identical text served from the exact cache; no tokenizer, no forward.</span></div>
+          <div class="li"><span class="dot" style="background:var(--l2)"></span><span><strong>L2 semantic hit</strong> &mdash; a similar prior prompt's label was reused after embedding.</span></div>
+          <div class="li"><span class="dot" style="background:var(--degraded)"></span><span><strong>Degraded</strong> &mdash; Redis unreachable; failed open to the compute path.</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Backend</h2>
+        <div class="provenance" id="backend">loading&hellip;</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Per-classifier example sets. Each set: three close paraphrases (a miss then
+// two L2 semantic hits) plus a distinct fourth prompt (a fresh compute miss).
+const EXAMPLES = {
+  complexity: [
+    "What is the capital of France?",
+    "Which city is the capital of France?",
+    "What's France's capital city?",
+    "Prove by induction that the sum of the first n odd numbers is n squared.",
+  ],
+  cost: [
+    "Write a short poem about the sea.",
+    "Write a brief poem about the sea.",
+    "Compose a short poem about the sea.",
+    "Translate this entire 400-page novel into French, preserving tone and style.",
+  ],
+  sensitivity: [
+    "What is the weather forecast for tomorrow?",
+    "What's tomorrow's weather forecast?",
+    "Tell me the weather forecast for tomorrow.",
+    "Store my social security number 123-45-6789 for later use.",
+  ],
+};
+const FALLBACK_EXAMPLES = [
+  "What is the capital of France?",
+  "Which city is the capital of France?",
+  "What's France's capital city?",
+];
+const TIER = {
+  COMPUTE_MISS: { cls: "b-miss", text: "COMPUTE MISS", short: "miss" },
+  L1_EXACT_HIT: { cls: "b-l1", text: "L1 EXACT HIT", short: "L1" },
+  L2_SEMANTIC_HIT: { cls: "b-l2", text: "L2 SEMANTIC HIT", short: "L2" },
+  DEGRADED: { cls: "b-degraded", text: "DEGRADED", short: "degr" },
+};
+const $ = (id) => document.getElementById(id);
+
+let CLASSIFIERS = [];   // [{name, classifier_id, labels, totals}]
+let current = null;     // selected classifier name
+
+function currentEntry() { return CLASSIFIERS.find((c) => c.name === current); }
+
+function renderChips() {
+  const box = $("chips");
+  box.innerHTML = "";
+  const set = EXAMPLES[current] || FALLBACK_EXAMPLES;
+  set.forEach((ex, i) => {
+    const b = document.createElement("button");
+    b.className = "ghost";
+    b.textContent = (i + 1) + ". " + ex;
+    b.onclick = () => { $("prompt").value = ex; classify(); };
+    box.appendChild(b);
+  });
+}
+
+function badgeHTML(tier) {
+  const t = TIER[tier] || TIER.COMPUTE_MISS;
+  return { cls: t.cls, text: t.text, short: t.short };
+}
+
+function renderBars(ranked) {
+  const box = $("bars");
+  box.innerHTML = "";
+  if (!ranked || !ranked.length) return;
+  const scores = ranked.map((r) => r.score);
+  const max = Math.max(...scores), min = Math.min(...scores);
+  const span = (max - min) || 1;
+  ranked.forEach((r, i) => {
+    const pct = Math.round(((r.score - min) / span) * 100);
+    const row = document.createElement("div");
+    row.className = "bar-row" + (i === 0 ? " top" : "");
+    row.innerHTML =
+      '<div class="name">' + r.label + '</div>' +
+      '<div class="track"><div class="fill" style="width:' + pct + '%"></div></div>' +
+      '<div class="score">' + r.score.toFixed(3) + '</div>';
+    box.appendChild(row);
+  });
+}
+
+function pushTimeline(text, clf, data) {
+  const tl = $("timeline");
+  const empty = tl.querySelector(".empty");
+  if (empty) empty.remove();
+  const b = badgeHTML(data.tier);
+  const top = (data.ranked && data.ranked[0]) ? data.ranked[0].label : "—";
+  const item = document.createElement("div");
+  item.className = "tl-item";
+  item.innerHTML =
+    '<div class="q" title="' + text.replace(/"/g, "&quot;") + '">' + text + '</div>' +
+    '<div class="meta">' +
+      '<span class="clf">' + clf + '</span>' +
+      '<span class="toplabel">' + top + '</span>' +
+      '<span class="lat">' + data.latency_ms + ' ms</span>' +
+      '<span class="tl-badge ' + b.cls + '">' + b.text + '</span>' +
+    '</div>';
+  tl.prepend(item);
+}
+
+function renderTotals(t) {
+  t = t || { cache_hits: 0, l2_hits: 0, l2_misses: 0, l2_degraded: 0 };
+  $("s-l1").textContent = t.cache_hits;
+  $("s-l2").textContent = t.l2_hits;
+  $("s-miss").textContent = t.l2_misses;
+  $("s-degraded").textContent = t.l2_degraded;
+}
+
+function onClassifierChange() {
+  current = $("classifier").value;
+  const e = currentEntry();
+  $("taxonomy").textContent = e && e.labels && e.labels.length
+    ? "labels: " + e.labels.join(" · ") : "";
+  $("statsNote").textContent = "Totals for '" + current + "'.";
+  renderChips();
+  renderTotals(e ? e.totals : null);
+}
+
+async function classify() {
+  const text = $("prompt").value.trim();
+  const clf = current;
+  $("err").textContent = "";
+  if (!text) { $("err").textContent = "Enter a prompt first."; return; }
+  if (!clf) { $("err").textContent = "No classifier available."; return; }
+  $("go").disabled = true;
+  $("statusline").textContent = "classifying…";
+  try {
+    const res = await fetch("/api/classify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, classifier: clf }),
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status + ": " + (await res.text()));
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    const b = badgeHTML(data.tier);
+    const badge = $("tierBadge");
+    badge.className = "badge " + b.cls;
+    $("tierText").textContent = b.text;
+    $("lat").textContent = data.latency_ms;
+    $("prov").textContent =
+      "classifier " + data.classifier_id + " · status " + data.status +
+      " · model " + short(data.model_revision) + " · taxonomy " + data.taxonomy_revision;
+    renderBars(data.ranked);
+    $("resultCard").style.display = "";
+    pushTimeline(text, clf, data);
+
+    // Keep this classifier's cached totals fresh, and show them if it's still selected.
+    const e = CLASSIFIERS.find((c) => c.name === clf);
+    if (e) e.totals = data.totals;
+    if (clf === current) renderTotals(data.totals);
+    $("statusline").textContent = "";
+  } catch (e) {
+    $("err").textContent = String(e.message || e);
+    $("statusline").textContent = "";
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+function short(s) { return s && s.length > 12 ? s.slice(0, 12) + "…" : (s || "—"); }
+
+async function loadBackend() {
+  try {
+    const r = await fetch("/api/info");
+    const d = await r.json();
+    CLASSIFIERS = d.classifiers || [];
+    const sel = $("classifier");
+    sel.innerHTML = "";
+    CLASSIFIERS.forEach((c) => {
+      const o = document.createElement("option");
+      o.value = c.name;
+      o.textContent = c.name;
+      sel.appendChild(o);
+    });
+    current = CLASSIFIERS.length ? CLASSIFIERS[0].name : null;
+    if (current) sel.value = current;
+    $("backend").textContent =
+      CLASSIFIERS.length + " classifier(s) · cache " + d.cache_strategy +
+      (d.redis_url ? " (" + d.redis_url + ")" : "") +
+      " · threshold " + d.threshold;
+    onClassifierChange();
+  } catch (e) {
+    $("backend").textContent = "unavailable";
+  }
+}
+
+$("go").onclick = classify;
+$("classifier").addEventListener("change", onClassifierChange);
+$("prompt").addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") classify();
+});
+loadBackend();
+</script>
+</body>
+</html>

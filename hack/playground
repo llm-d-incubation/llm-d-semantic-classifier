@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Launch the interactive semantic-cache playground: a local web UI over the real
+# classifier + L1/L2 cache. One command that installs what it can, starts Redis
+# Stack, downloads the model if missing, builds the demo binary, and serves it.
+#
+# Usage:
+#   ./hack/playground                 # docker Redis + complexity model, UI on :8080
+#   LLM_D_SC_PLAYGROUND_ADDR=127.0.0.1:9000 ./hack/playground
+#   LLM_D_SC_CLASSIFIER=sensitivity ./hack/playground
+#
+# Requirements it checks for you: a Rust toolchain >= 1.80 (the redis-semantic
+# feature), Docker (for Redis Stack), and Python 3 + huggingface_hub (one-time
+# ~90MB model download; installed via pip if missing).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+# Classifiers offered in the UI dropdown. Default: all three built-ins.
+# Set LLM_D_SC_CLASSIFIER=<name> to demo a single classifier instead.
+CLASSIFIERS="${LLM_D_SC_CLASSIFIER:-complexity cost sensitivity}"
+MODELS_DIR="${LLM_D_SC_MODELS_DIR:-artifacts/models}"
+UI_ADDR="${LLM_D_SC_PLAYGROUND_ADDR:-127.0.0.1:8080}"
+REDIS_PORT="${REDIS_PORT:-6379}"
+REDIS_URL="${LLM_D_SC_REDIS_URL:-redis://127.0.0.1:${REDIS_PORT}}"
+REDIS_NAME="llm-d-sc-playground-redis"
+STARTED_REDIS=0
+
+log()  { printf '\033[36m[playground]\033[0m %s\n' "$*"; }
+warn() { printf '\033[33m[playground]\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[31m[playground]\033[0m %s\n' "$*" >&2; exit 1; }
+
+cleanup() {
+  if [ "$STARTED_REDIS" -eq 1 ]; then
+    log "stopping Redis ($REDIS_NAME)…"
+    docker stop "$REDIS_NAME" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+# --- Rust toolchain ---------------------------------------------------------
+command -v cargo >/dev/null 2>&1 || die "cargo not found. Install Rust >= 1.80 (https://rustup.rs)."
+
+# --- Redis Stack (semantic L2 tier) -----------------------------------------
+CACHE_STRATEGY="redis-semantic"
+if command -v docker >/dev/null 2>&1; then
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$REDIS_NAME"; then
+    log "Redis already running ($REDIS_NAME); reusing it."
+  else
+    # Clean up any stopped leftover with the same name, then start detached.
+    docker rm -f "$REDIS_NAME" >/dev/null 2>&1 || true
+    log "starting Redis Stack on port $REDIS_PORT…"
+    if docker run -d --rm --name "$REDIS_NAME" -p "${REDIS_PORT}:6379" \
+        redis/redis-stack-server:latest >/dev/null; then
+      STARTED_REDIS=1
+    else
+      warn "could not start Redis; the demo will run L1-exact only (no semantic hits)."
+      CACHE_STRATEGY="exact"
+    fi
+  fi
+
+  if [ "$CACHE_STRATEGY" = "redis-semantic" ]; then
+    log "waiting for Redis to accept connections…"
+    ready=0
+    for _ in $(seq 1 30); do
+      if docker exec "$REDIS_NAME" redis-cli ping 2>/dev/null | grep -q PONG; then
+        ready=1; break
+      fi
+      sleep 1
+    done
+    [ "$ready" -eq 1 ] && log "Redis ready." \
+      || { warn "Redis did not become ready; falling back to L1-exact only."; CACHE_STRATEGY="exact"; }
+  fi
+
+  # Start every session with an empty cache. A reused Redis container can hold
+  # cached entries from a previous run, which would make the first prompts read
+  # as hits instead of a clean compute miss — flush so the demo starts fresh.
+  if [ "$CACHE_STRATEGY" = "redis-semantic" ]; then
+    log "flushing Redis for a clean cache…"
+    docker exec "$REDIS_NAME" redis-cli FLUSHALL >/dev/null 2>&1 || true
+  fi
+else
+  warn "docker not found — running L1-exact only (no semantic hits to demo)."
+  warn "Install Docker and re-run to see L2 semantic hits."
+  CACHE_STRATEGY="exact"
+fi
+
+# --- Model artifacts --------------------------------------------------------
+# Ensure the Python downloader is available once, then fetch each missing model.
+ensure_hf() {
+  command -v python3 >/dev/null 2>&1 || die "python3 not found; needed to download models."
+  if ! python3 -c 'import huggingface_hub' >/dev/null 2>&1; then
+    log "installing huggingface_hub (pip)…"
+    python3 -m pip install --quiet --user huggingface_hub \
+      || die "failed to install huggingface_hub; install it and re-run."
+  fi
+}
+for c in $CLASSIFIERS; do
+  if [ ! -s "${MODELS_DIR}/${c}/model.safetensors" ]; then
+    log "model '${c}' not found; fetching (~90MB, one-time)…"
+    ensure_hf
+    ./hack/fetch-model --classifier "$c"
+  else
+    log "model '${c}' present."
+  fi
+done
+
+# --- Build ------------------------------------------------------------------
+log "building the playground binary (release, --features playground)…"
+cargo build --release --features playground --bin llm-d-sc-playground
+
+# --- Run --------------------------------------------------------------------
+export LLM_D_SC_MODELS_DIR="$MODELS_DIR"
+export LLM_D_SC_PLAYGROUND_CLASSIFIERS="$(echo "$CLASSIFIERS" | tr ' ' ',')"
+export LLM_D_SC_CACHE="$CACHE_STRATEGY"
+export LLM_D_SC_REDIS_URL="$REDIS_URL"
+export LLM_D_SC_PLAYGROUND_ADDR="$UI_ADDR"
+
+# Open a browser once the binary is about to start (best-effort, non-fatal).
+if command -v xdg-open >/dev/null 2>&1; then
+  ( sleep 2; xdg-open "http://${UI_ADDR}" >/dev/null 2>&1 || true ) &
+elif command -v open >/dev/null 2>&1; then
+  ( sleep 2; open "http://${UI_ADDR}" >/dev/null 2>&1 || true ) &
+fi
+
+log "cache strategy: ${CACHE_STRATEGY}"
+log "starting… open http://${UI_ADDR}  (Ctrl-C to stop)"
+exec ./target/release/llm-d-sc-playground

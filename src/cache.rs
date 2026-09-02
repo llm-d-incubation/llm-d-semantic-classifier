@@ -19,11 +19,26 @@
 //! The cache stores the typed [`crate::classify::ClassificationResult`], not a
 //! `String`.
 
+// The Redis semantic (L2) backend and its supporting modules are compiled only
+// when the `redis-semantic` feature is enabled. The `SemanticCache` trait,
+// `NoopSemanticCache`, and `identity_tag` below stay always-compiled — they are
+// the seam `ServiceCore` uses, defaulting to the Noop (off) cache.
+#[cfg(feature = "redis-semantic")]
+pub mod breaker;
+#[cfg(feature = "redis-semantic")]
+pub mod redis;
+#[cfg(feature = "redis-semantic")]
+pub mod redis_codec;
+// Semantic cache for full LLM responses (playground/gateway use). Reuses the
+// RediSearch vector-KNN machinery in a separate index/namespace.
+#[cfg(feature = "redis-semantic")]
+pub mod response;
+
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Condvar, Mutex};
 
-use crate::classify::{ClassificationResult, ClassifyError};
+use crate::classify::{ClassificationResult, ClassifyError, Embedding};
 
 /// The path a request took through the cache pipeline.
 ///
@@ -372,6 +387,38 @@ impl Default for ExactCache {
     }
 }
 
+/// The pluggable L2 (semantic / approximate) cache seam.
+///
+/// Interposes on the embedding between `embed` and `rank`. It is BEST-EFFORT:
+/// `lookup` returns `None` on any error (fail-open to compute) and `insert`
+/// is fire-and-forget. `identity` isolates entries by classifier/model/
+/// tokenizer/taxonomy so a revision change can never serve a stale label.
+pub trait SemanticCache: Send + Sync {
+    /// Return a stored result whose embedding is within the configured
+    /// similarity threshold of `embedding` and shares `identity`, else `None`.
+    fn lookup(&self, embedding: &Embedding, identity: &str) -> Option<ClassificationResult>;
+
+    /// Record `result` under `embedding` and `identity`. Best-effort; never blocks.
+    fn insert(&self, embedding: &Embedding, result: &ClassificationResult, identity: &str);
+}
+
+/// The default L2 cache: always misses, never stores. Zero cost when the
+/// semantic tier is disabled.
+pub struct NoopSemanticCache;
+
+impl SemanticCache for NoopSemanticCache {
+    fn lookup(&self, _embedding: &Embedding, _identity: &str) -> Option<ClassificationResult> {
+        None
+    }
+    fn insert(&self, _embedding: &Embedding, _result: &ClassificationResult, _identity: &str) {}
+}
+
+/// Build the L2 isolation tag from a cache-identity tuple (same fields as the
+/// blake3 L1 key), pipe-separated so field boundaries cannot alias.
+pub fn identity_tag(id: (&str, &str, &str, &str)) -> String {
+    format!("{}|{}|{}|{}", id.0, id.1, id.2, id.3)
+}
+
 #[cfg(test)]
 mod bounded_tests {
     use super::*;
@@ -667,5 +714,45 @@ mod tests {
             "all other callers must be coalesced waits"
         );
         assert_eq!(hits, 0, "no true cache hits on a cold cache");
+    }
+}
+
+#[cfg(test)]
+mod semantic_tests {
+    use super::*;
+    use crate::classify::{ClassifyStatus, RankedSignal};
+
+    fn result(id: &str) -> ClassificationResult {
+        ClassificationResult {
+            classifier_id: "c".into(),
+            model_revision: "m".into(),
+            tokenizer_revision: "t".into(),
+            taxonomy_revision: "x".into(),
+            status: ClassifyStatus::Ok,
+            ranked: vec![RankedSignal {
+                id: id.into(),
+                score: 1.0,
+            }],
+        }
+    }
+
+    #[test]
+    fn noop_semantic_cache_never_hits() {
+        let cache = NoopSemanticCache;
+        let e = Embedding::new(vec![1.0, 0.0]);
+        cache.insert(&e, &result("simple"), "c|m|t|x");
+        assert!(
+            cache.lookup(&e, "c|m|t|x").is_none(),
+            "noop must always miss"
+        );
+    }
+
+    #[test]
+    fn identity_tag_is_stable_and_field_separated() {
+        assert_eq!(identity_tag(("c", "m", "t", "x")), "c|m|t|x");
+        assert_ne!(
+            identity_tag(("a", "bc", "d", "e")),
+            identity_tag(("ab", "c", "d", "e"))
+        );
     }
 }

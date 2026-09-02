@@ -147,6 +147,77 @@ are comparable WITHIN one response, which is what makes the margin between the
 top two labels meaningful, but they are not calibrated across models or
 taxonomies and should not be read as confidence in a statistical sense.
 
+**Optional: semantic result cache.** Off by default, and not even compiled into
+the default build. The built-in exact-match cache only reuses a label for the
+identical text. The Redis-backed semantic tier is gated behind the
+`redis-semantic` cargo feature, so the default build stays dependency-light and
+keeps MSRV 1.75; enabling the feature pulls in the `redis` crate, which requires
+rustc ≥ 1.80. Build it in with `--features redis-semantic`, then set
+`LLM_D_SC_CACHE=redis-semantic` to add an optional L2 tier behind the exact
+cache: on an exact-cache miss, after the prompt is embedded, a semantically
+similar prior prompt reuses its stored label instead of re-ranking. (A binary
+built without the feature logs a warning and falls back to the exact cache if
+`redis-semantic` is requested at runtime.) It requires a running
+[Redis Stack](https://redis.io/docs/latest/operate/oss_and_stack/install/install-stack/)
+(RediSearch) instance and is a best-effort accelerator, not a source of truth: a
+slow or unreachable Redis degrades to the normal compute path (fail-open) and
+never fails the request.
+
+| Env var | Meaning | Default |
+| --- | --- | --- |
+| `LLM_D_SC_CACHE` | Cache strategy: `exact` or `redis-semantic` | `exact` |
+| `LLM_D_SC_REDIS_URL` | Redis Stack URL (e.g. `redis://127.0.0.1:6379`); used only when the strategy is `redis-semantic` | none; required when `redis-semantic` |
+| `LLM_D_SC_CACHE_THRESHOLD` | Cosine similarity gate for a semantic hit; higher is safer but reuses less | `0.90` |
+| `LLM_D_SC_CACHE_TTL` | Cached-label time-to-live, in seconds | `86400` |
+| `LLM_D_SC_CACHE_TIMEOUT_MS` | Per-Redis-operation timeout, in milliseconds | `50` |
+
+To run the live Redis integration tests locally (`#[ignore]`d by default because
+they need a real Redis Stack):
+
+```bash
+./hack/redis-stack.sh &   # start Redis Stack
+REDIS_URL=redis://127.0.0.1:6379 \
+  cargo test --features redis-semantic --test redis_semantic -- --ignored
+```
+
+`REDIS_URL` above only configures that test run; the running service reads
+`LLM_D_SC_REDIS_URL` instead.
+
+**Interactive playground.** To see the cache behave in a browser, one command
+starts Redis Stack (with a clean cache), downloads any missing models, and
+serves a local web UI:
+
+```bash
+./hack/playground      # then open http://127.0.0.1:8080
+```
+
+Pick a classifier (`complexity`, `cost`, or `sensitivity`) from the dropdown,
+classify a prompt, then a paraphrase of it: the paraphrase is served as an **L2
+semantic hit** (a similar prior prompt's label is reused after embedding), and
+re-sending the identical text is an **L1 exact hit** returned in well under a
+millisecond. Each classifier keeps its own isolated cache. The dropdown ships
+per-classifier example prompts to try. It needs Docker (for Redis Stack) and a
+one-time ~90 MB download per model (Python 3 + `huggingface_hub`, installed by
+the script if absent); without Docker it still runs, fail-open, with the exact
+cache only. Set `LLM_D_SC_CLASSIFIER=complexity` to demo a single classifier.
+The playground is built only with `--features playground`, so it never affects
+the default build.
+
+Two operational constraints apply when the semantic tier is enabled. Both are
+fail-open (they degrade to the normal compute path and never produce a wrong
+label), but they are silent, so plan for them:
+
+- **One embedding dimension per Redis instance.** The vector index is created
+  lazily with the embedding dimension of the first entry written. A classifier
+  whose embeddings have a different dimension, pointed at the same Redis, simply
+  gets no L2 benefit (its writes fail to index and its lookups miss). Give
+  classifiers with different embedding dimensions separate Redis instances.
+- **Keep cache-identity fields comma-free.** Entries are isolated by an identity
+  tag built from the classifier id and the model, tokenizer, and taxonomy
+  revisions, so one classifier or revision never reuses another's labels. That
+  isolation relies on those fields not containing a comma (the tag separator);
+  the built-in classifiers and revision fingerprints already satisfy this.
+
 **4. Call it over gRPC.** The bundled gateway stand-in issues a real call over a
 persistent channel, consumes the signals, and applies its own test-only policy
 afterwards, demonstrating that routing authority stays outside this service:
@@ -210,6 +281,11 @@ a separate OCI artifact.
                  ▼
    tokenize → transformer → pooling → normalize → rank
 ```
+
+An optional semantic (L2) cache tier can sit behind the exact-result cache: on a
+miss, once the prompt is embedded, a similar-enough prior prompt returns its
+stored label instead of reaching the classifier runtime. It is off by default;
+see "Optional: semantic result cache" under [Quick start](#quick-start) above.
 
 Three properties are load-bearing:
 
