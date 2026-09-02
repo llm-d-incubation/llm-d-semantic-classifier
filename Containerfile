@@ -9,6 +9,11 @@
 # classify against a real taxonomy with no external file. A custom definition can
 # still be supplied at runtime by pointing LLM_D_SC_CLASSIFIER at a path.
 
+# The image is built WITH `redis-semantic` so the L2 semantic cache can be
+# switched on at runtime via `LLM_D_SC_CACHE=redis-semantic` (default `exact`,
+# i.e. off) without needing a different image. The crate's DEFAULT build stays
+# dependency-light to hold MSRV 1.75; this builder is a separate toolchain
+# (rust:1-bookworm >= 1.80), so that intent is unaffected.
 FROM rust:1-bookworm AS builder
 RUN apt-get update \
  && apt-get install -y --no-install-recommends protobuf-compiler build-essential \
@@ -23,7 +28,7 @@ RUN mkdir -p src/bin \
  && echo 'fn main() {}' > src/bin/server.rs \
  && echo 'fn main() {}' > src/bin/classify.rs \
  && echo 'fn main() {}' > src/bin/gateway-probe.rs \
- && cargo build --release \
+ && cargo build --release --features redis-semantic \
         --bin llm-d-sc-server \
         --bin llm-d-sc-classify \
         --bin llm-d-sc-gateway-probe \
@@ -31,7 +36,7 @@ RUN mkdir -p src/bin \
 
 # Layer 2: copy source; only the final build is incremental.
 COPY . .
-RUN cargo build --release \
+RUN cargo build --release --features redis-semantic \
       --bin llm-d-sc-server \
       --bin llm-d-sc-classify \
       --bin llm-d-sc-gateway-probe
