@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "label": "c15-redis-down",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 32,
+  "connections": 32,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 1788375021,
+  "warmup_requests": 100,
+  "measured_requests": 2351,
+  "wall_secs": 20.001293177,
+  "throughput_rps": 117.54239984359987,
+  "throughput_rpm": 7052.543990615992,
+  "offered_concurrency": 32,
+  "implied_mean_ms": 272.24218701148453,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "COMPLEX": 207,
+    "MEDIUM": 2144
+  },
+  "latency": {
+    "count": 2351,
+    "min_ms": 219.890772,
+    "mean_ms": 272.3735372501063,
+    "stddev_ms": 19.934736851776734,
+    "p50_ms": 274.658771,
+    "p90_ms": 293.110551,
+    "p95_ms": 299.826574,
+    "p99_ms": 334.154564,
+    "p999_ms": 362.57978,
+    "max_ms": 377.010878
+  },
+  "started_unix": 1788375022
+}

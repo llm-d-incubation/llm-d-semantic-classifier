@@ -80,6 +80,11 @@ struct Args {
     /// Free-form label recorded in the manifest.
     #[arg(long, default_value = "")]
     label: String,
+    /// gRPC ContextCompleteness: 0=UNSPECIFIED, 1=FULL, 2=DELTA.
+    /// DELTA must short-circuit to ABSTAIN before any cache or model work, which
+    /// is the behaviour PR #23 introduced and this flag exists to verify.
+    #[arg(long, default_value_t = 0)]
+    context_completeness: i32,
     /// Model name sent in http mode.
     #[arg(long, default_value = "router-model")]
     model: String,
@@ -316,7 +321,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         session_id: String::new(),
                         context: prompt,
                         signals: vec![],
-                        context_completeness: 0,
+                        context_completeness: args.context_completeness,
                     };
                     match c.classify(req).await {
                         Ok(resp) => {
@@ -338,6 +343,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     (true, t.label.clone())
                                 }
                                 (1, _) => (false, "INVALID_EMPTY_RANKING".into()),
+                                // 2 == ABSTAIN. Correct, not a failure, when the
+                                // request declared DELTA context.
+                                (2, _) if args.context_completeness == 2 => {
+                                    (true, "ABSTAIN".into())
+                                }
                                 (st, _) => (false, format!("STATUS_{st}")),
                             }
                         }

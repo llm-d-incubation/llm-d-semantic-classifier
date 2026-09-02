@@ -1,6 +1,6 @@
 # llm-d-sc v0.2-staging — statistical report
 
-Generated from 163 captured runs. Every row is one measured arm; raw per-request samples for each are in `results/raw/<label>.csv`.
+Generated from 181 captured runs. Every row is one measured arm; raw per-request samples for each are in `results/raw/<label>.csv`.
 
 Latency is wall-clock round-trip time measured at the driver, so it includes network transit, transport framing, admission, queue wait and service. Percentiles are nearest-rank, matching `llm-d-sc/src/bench.rs::percentile`. Mean and standard deviation are reported ALONGSIDE the distribution, never instead of it.
 

@@ -473,38 +473,91 @@ saturation", not "+2 ms per request".
 The backends were verified not to be the limit: `vcr-small` × 3 with zero
 simulated latency sustains 45,399 req/s directly, above the gateway ceiling.
 
-### But novel prompts do not get classified at all
+### Most routing decisions are silently lost at the default timeout
 
-With the POC default `timeout_ms: 100` and a cache-miss forward of ~120 ms:
+This is the single most important operational finding in the campaign.
 
-| Workload | p50 | Tier actually reached |
-|---|---:|---|
-| Cached prompts | 103.35 ms | `large` (92 ms backend) — **classified** |
-| **Novel prompts** | 23.99 ms | `general` → small (22 ms) — **failed open** |
+With the tiers made latency-distinguishable (`large` = 200 ms, `small`/`general`
+= 0 ms), every request's destination is readable straight off its own latency, so
+the fraction that was *actually classified* can be counted directly. Using
+`timeout_ms: 1000` as the reference — high enough that classification always
+completes — gives the true label distribution to compare against:
 
-Backend latencies were verified directly (small 22.37 ms, large 92.05 ms), so the
-tier reached is unambiguous.
+| Hit ratio | Reference (t=1000) | t=300 | **t=100 (POC default)** | **Decisions lost at t=100** |
+|---:|---:|---:|---:|---:|
+| 0 % | 99.0 % | 99.2 % | **1.3 %** | **98.7 %** |
+| 50 % | 73.8 % | 56.6 % | 4.1 % | 94.4 % |
+| 90 % | 96.5 % | 83.0 % | 25.3 % | 73.8 % |
+| 100 % | 92.5 % | 94.0 % | 23.3 % | **74.8 %** |
 
-**Any prompt the classifier has not seen before is routed by fail-open, not by
-classification.** The gateway returns 200 and looks healthy; the routing simply
-is not happening. This is invisible in error rates.
+**At the shipped default, between 74 % and 99 % of routing decisions never
+happen.** Traffic silently falls through to the default cluster.
 
-Raising the timeout fixes correctness and destroys latency:
+The first pass reported this only for novel prompts. It is worse than that: even
+at a **100 % cache hit ratio**, where the classifier answers in ~15 µs, three
+quarters of decisions are still lost under concurrency. Raising the timeout to
+300 ms recovers most of them, at the cost of throughput (see the sweep below).
 
-| `timeout_ms` | req/s | p50 | Outcome |
+| `timeout_ms` | req/s (novel prompts) | p50 | Outcome |
 |---:|---:|---:|---|
 | 100 | 270 | 26.6 ms | fails open |
 | 250 | 72 | 273.4 ms | classifies |
 | 500 | 64 | 249.0 ms | classifies |
 | 1000 | 23 | 683.3 ms | classifies, degraded |
 
-**Recommendation.** Do not ship `timeout_ms: 100` with a CPU classifier. Either
-warm the cache for the expected prompt distribution, accept ~250 ms on first
-touch, or move classification off the synchronous request path. And **alarm on
-fail-open rate** — a gateway that silently stops routing is worse than one that
-errors, because nothing pages.
+### A classifier outage is invisible — it looks like a speed-up
 
----
+The filter fails open by design, which is the right default. The problem is that
+the failure is undetectable from any signal an operator normally watches.
+Measured with the filter pointed at a dead endpoint (`127.0.0.1:1`, which refuses
+inside the pod's own netns and needs no DNS):
+
+| State | req/s | p50 | HTTP status |
+|---|---:|---:|---|
+| Classifier healthy | 25,522 | 2.46 ms | 100 % 200 |
+| **Classifier unreachable** | **29,155** | **2.13 ms** | **100 % 200** |
+
+With the classifier completely gone the gateway is **14 % faster**, error rate is
+**zero**, and every request returns 200. On a latency-and-errors dashboard a total
+classifier outage reads as a performance improvement. Nothing pages, and all
+traffic quietly collapses onto the default cluster.
+
+This Praxis build's admin `/metrics` returns HTTP 200 with a **zero-byte body**,
+so there is currently no gateway-side counter to alarm on either.
+
+> **Recommendations.** Do not ship `timeout_ms: 100` with a CPU classifier — it
+> loses the majority of routing decisions even when the cache is warm. Export and
+> **alarm on the fail-open rate**; a gateway that silently stops routing is worse
+> than one that errors, because an erroring gateway pages someone. Treat
+> "classification coverage" as an SLI in its own right, separate from latency and
+> error rate.
+
+## 6b. Failure modes that DO behave well
+
+The L2 tier degrades correctly. With Redis killed mid-campaign, `redis-semantic`
+fell back to exact-only with no impact:
+
+| State | req/s | p50 | errors |
+|---|---:|---:|---:|
+| Redis reachable | 116 | 278.2 ms | 0 |
+| **Redis killed** | 118 | 274.7 ms | **0** |
+
+The consecutive-failure circuit breaker and bounded write-back work as designed.
+
+## 6c. The ABSTAIN path (PR #23) works, and is essentially free
+
+`context_completeness: DELTA` must short-circuit to `ABSTAIN` before any cache or
+model work. Verified on the wire:
+
+| `context_completeness` | req/s | p50 | Statuses returned |
+|---|---:|---:|---|
+| `FULL` | 345 | 178.009 ms | `COMPLEX` × 5,155, `MEDIUM` × 20 |
+| **`DELTA`** | **273,561** | **0.219 ms** | `ABSTAIN` × 4,103,707 |
+
+**793× faster**, confirming it returns before the model forward. The `FULL` arm
+also shows the classifier genuinely discriminating between labels rather than
+returning a constant — useful independent evidence that the throughput figures
+elsewhere represent real classification work.
 
 ## 7. What was NOT measured
 
@@ -515,8 +568,8 @@ Stated plainly, per house rule 7:
 * **Backends are simulated.** vllm-vcr with a real vLLM Rust frontend and
   configurable TTFT/ITL — good for latency shape, not a real model server.
 * **No accuracy evaluation** of semantic-cache hits at threshold 0.90.
-* **No cross-replica semantic-cache test**, which is where L2 would most plausibly
-  pay off.
+* **Praxis horizontal scaling was not tested** — all gateway arms used a single
+  Praxis replica.
 * **Miss-path arms have fewer samples** (~1–3 k) than hit-path arms (~2 M), so
   miss-path p99.9 is not well determined. p50/p90 are sound.
 * **The `llm-d` integration was not benchmarked.** The integration PR could not
@@ -536,11 +589,13 @@ Stated plainly, per house rule 7:
 | 3 | **Client connection pool of 32–64** — worth 6.3× on identical load | §2b |
 | 4 | Hold **offered concurrency 32–64** per replica | §1b |
 | 5 | Size for **256 in-flight per replica**; scale out past that | §1a |
-| 6 | **Raise `timeout_ms` above the forward latency, or warm the cache** | §6 |
-| 7 | **Alarm on fail-open rate**, not just error rate | §6 |
+| 6 | **Do not ship `timeout_ms: 100`** — it loses 74–99 % of routing decisions even with a warm cache | §6 |
+| 7 | **Alarm on fail-open rate / classification coverage** — an outage looks like a speed-up | §6 |
 | 8 | Keep **`LLM_D_SC_CACHE=exact`** — no configuration makes L2 pay today | §4 |
 | 9 | Classify **turn deltas, not documents** | §5 |
 | 10 | **Add routes freely** — 48→2,000 anchors costs nothing | §4b |
 | 11 | Don't bypass ClusterIP — it costs 0.8–1.6 % | §2c |
 | 12 | Budget **~half your gateway throughput** for classification at saturation | §6 |
 | 13 | Make `DEFAULT_QUEUE_BOUND` runtime-configurable | §1a |
+| 14 | Export gateway routing counters — Praxis `/metrics` is currently empty | §6 |
+| 15 | `context_completeness: DELTA` is a free fast path (793×) — use it for follow-up turns | §6c |
