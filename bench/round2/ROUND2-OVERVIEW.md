@@ -28,16 +28,33 @@ for complete distributions.
 The single most useful comparison in this campaign. Both gateways front the
 **identical** vllm-vcr backends, so the difference is the gateway.
 
-| Path | Knee (concurrency) | Peak req/s | **Peak req/min** | p99 at knee | % of backend ceiling |
-|---|---:|---:|---:|---:|---:|
-| Praxis control (static routing) | 1024 | 65,901 | 3,954,073 | 26.29 ms | — |
-| **Backend direct (ceiling)** | 256 | **47,589** | 2,855,350 | 8.08 ms | 100 % |
-| **Praxis + llm-d-sc classification** | 128 | **37,738** | 2,264,276 | 6.27 ms | **79 %** |
-| **llm-d inference gateway (EPP)** | 32 | **11,296** | 677,744 | 6.38 ms | **24 %** |
+| Path | llm-d-sc in path? | Knee | Peak req/s | **Peak req/min** | p99 at knee | % of backend ceiling |
+|---|:--:|---:|---:|---:|---:|---:|
+| Praxis control (static routing) | no | 1024 | 65,901 | 3,954,073 | 26.29 ms | — |
+| **Backend direct (ceiling)** | n/a | 256 | **47,589** | 2,855,350 | 8.08 ms | 100 % |
+| **Praxis + llm-d-sc classification** | **yes** | 128 | **37,738** | 2,264,276 | 6.27 ms | **79 %** |
+| **llm-d inference gateway (EPP)** | **no** | 32 | **11,296** | 677,744 | 6.38 ms | **24 %** |
 
-**Praxis with semantic classification sustains ~3.3× the throughput of the llm-d
-inference gateway** on this hardware, and reaches 79 % of what the backends can
-absorb unaided.
+**The llm-d arm contains no llm-d-sc.** There is no integration to benchmark yet
+(see *What is still open*), so it measures the bare llm-d inference gateway: Envoy
+plus an EPP running `queue-scorer`, `prefix-cache-scorer` and
+`active-request-scorer` against live pod metrics. Verified rather than assumed —
+the EPP plugin config and args contain zero references to llm-d-sc or
+classification, while the Praxis chain carries `filter: llm_d_sc`.
+
+That asymmetry cuts **against** Praxis in the table, so read it two ways:
+
+* **Like for like (neither classifying):** Praxis control 65,901 req/s vs llm-d
+  11,296 req/s — a **5.8× gap**.
+* **Praxis handicapped:** Praxis running full semantic classification (37,738)
+  is still **3.3× faster than llm-d doing no classification at all**.
+
+Neither reading is a like-for-like *routing-quality* comparison: llm-d's EPP picks
+an endpoint from live queue-depth and prefix-cache state, which Praxis's static
+control listener does not attempt. This is a capacity comparison.
+
+**Praxis reaches 79 % of what the backends can absorb unaided, while carrying
+semantic classification.**
 
 > **Do not add the vLLM SR adapter to this table.** An earlier revision listed it
 > here and it was misread as a faster gateway. It is not a gateway: it classifies
@@ -293,7 +310,9 @@ llm-d context sensitivity is steeper than Praxis's cached path: 9,597 req/s at
   `llm-d/llm-d`, `praxis-proxy/praxis`, any `llm-d-incubation` repository, or
   `inference-payload-processor-rs`. The natural insertion point is an ext_proc
   filter ahead of the EPP -- the same shape as the vLLM SR adapter, which is now
-  a working precedent for it.
+  a working precedent for it. Until that exists, **every llm-d number here is
+  llm-d WITHOUT llm-d-sc**, and the campaign cannot say what classification would
+  cost on that gateway.
 * **No PR raised** for the vLLM SR adapter. It works and is benchmarked here, but
   upstreaming it needs a decision on where the softmax belongs: in an adapter, or
   as an optional normalised-score mode in llm-d-sc itself.
