@@ -1,6 +1,6 @@
 # Round 2 — statistical report (Praxis and llm-d)
 
-Generated from 291 captured runs. Raw per-request samples are retained alongside each arm.
+Generated from 311 captured runs. Raw per-request samples are retained alongside each arm.
 
 Latency is wall-clock round-trip time at the driver: it includes network transit, transport framing, gateway processing, any classification hop, and the backend. Percentiles are nearest-rank, matching `src/bench.rs::percentile`. Mean and standard deviation are reported alongside the distribution, never instead of it.
 
@@ -175,6 +175,40 @@ How many endpoints the EPP selects between.
 | pool02 | 9,864 | 591,828 | 11.345 | 13.739 | 14.566 | 18.731 | 427.619 | 843.765 | 12.967 | 30.580 | 0 | 0.000 |
 | pool03 | 10,489 | 629,369 | 11.624 | 13.397 | 14.008 | 15.657 | 291.186 | 446.733 | 12.189 | 14.876 | 0 | 0.000 |
 | pool06 | 10,109 | 606,531 | 12.366 | 14.623 | 15.232 | 16.919 | 202.101 | 332.625 | 12.644 | 8.867 | 0 | 0.000 |
+
+
+### I1 — llm-d (IPP) WITH llm-d-sc: paired ladder vs control
+
+The llm-d-ipp-scorer POC (llm-d-inference-payload-processor#299): Envoy ext_proc -> IPP -> llm-d-sc. `control` is the same Envoy with the ext_proc filter removed, so the delta is classification alone.
+
+| arm | req/s | req/min | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | err % |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| classified-c0008 | 4,091 | 245,487 | 2.003 | 2.423 | 2.795 | 3.015 | 3.737 | 10.981 | 1.955 | 0.468 | 0 | 0.000 |
+| classified-c0016 | 7,906 | 474,359 | 2.049 | 2.556 | 2.814 | 3.065 | 3.624 | 7.187 | 2.023 | 0.462 | 0 | 0.000 |
+| classified-c0032 | 15,043 | 902,569 | 2.094 | 2.706 | 2.902 | 3.323 | 5.103 | 15.899 | 2.126 | 0.507 | 0 | 0.000 |
+| classified-c0064 | 25,357 | 1,521,431 | 2.455 | 3.271 | 3.535 | 4.225 | 9.790 | 18.507 | 2.523 | 0.709 | 0 | 0.000 |
+| classified-c0128 | 38,632 | 2,317,947 | 3.207 | 4.377 | 4.785 | 5.723 | 9.972 | 16.332 | 3.313 | 0.881 | 0 | 0.000 |
+| classified-c0256 | 51,872 | 3,112,337 | 4.747 | 6.543 | 7.215 | 9.333 | 15.959 | 25.245 | 4.935 | 1.421 | 0 | 0.000 |
+| classified-c0512 | 59,925 | 3,595,473 | 8.122 | 11.639 | 12.931 | 16.222 | 22.908 | 33.502 | 8.541 | 2.441 | 0 | 0.000 |
+| control-c0008 | 5,191 | 311,483 | 1.542 | 1.662 | 1.709 | 1.984 | 2.526 | 12.299 | 1.540 | 0.192 | 0 | 0.000 |
+| control-c0016 | 9,861 | 591,652 | 1.648 | 1.800 | 1.873 | 2.262 | 3.296 | 12.217 | 1.622 | 0.289 | 0 | 0.000 |
+| control-c0032 | 18,121 | 1,087,288 | 1.807 | 2.035 | 2.156 | 2.467 | 3.706 | 16.596 | 1.765 | 0.396 | 0 | 0.000 |
+| control-c0064 | 34,636 | 2,078,130 | 1.978 | 2.163 | 2.297 | 2.847 | 4.392 | 20.852 | 1.847 | 0.492 | 0 | 0.000 |
+| control-c0128 | 57,895 | 3,473,674 | 2.225 | 2.979 | 3.147 | 3.594 | 9.189 | 18.907 | 2.210 | 0.739 | 0 | 0.000 |
+| control-c0256 | 92,706 | 5,562,381 | 2.667 | 3.773 | 4.140 | 5.158 | 11.200 | 23.549 | 2.761 | 0.927 | 0 | 0.000 |
+| control-c0512 | 126,708 | 7,602,463 | 3.844 | 5.495 | 6.088 | 7.976 | 16.994 | 194.471 | 4.043 | 2.411 | 0 | 0.000 |
+
+
+### I2 — llm-d (IPP) WITH llm-d-sc: context size
+
+| arm | req/s | req/min | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | err % |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| cached-ctx000064 | 25,601 | 1,536,053 | 2.444 | 3.254 | 3.512 | 4.119 | 6.880 | 56.747 | 2.499 | 0.719 | 0 | 0.000 |
+| cached-ctx000256 | 25,635 | 1,538,089 | 2.440 | 3.263 | 3.522 | 4.096 | 5.815 | 13.220 | 2.496 | 0.610 | 0 | 0.000 |
+| cached-ctx001024 | 24,747 | 1,484,790 | 2.552 | 3.355 | 3.611 | 4.216 | 6.093 | 17.253 | 2.585 | 0.631 | 0 | 0.000 |
+| cached-ctx004096 | 23,262 | 1,395,749 | 2.733 | 3.532 | 3.832 | 4.496 | 7.097 | 16.371 | 2.749 | 0.672 | 0 | 0.000 |
+| cached-ctx016384 | 19,540 | 1,172,415 | 3.157 | 4.179 | 4.522 | 5.384 | 10.566 | 15.183 | 3.272 | 0.810 | 0 | 0.000 |
+| novel-ctx000256 | 119 | 7,147 | 126.085 | 158.122 | 162.110 | 177.875 | 204.214 | 247.390 | 134.179 | 17.232 | 0 | 0.000 |
 
 
 ### V1 — vLLM Semantic Router adapter (http_classify), cached

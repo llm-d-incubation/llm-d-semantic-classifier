@@ -1,0 +1,118 @@
+# llm-d WITH llm-d-sc: the llm-d-ipp-scorer POC (llm-d/llm-d-inference-payload-processor#299)
+# adapted to waldorf and pointed at the SAME vllm-vcr backends as every other arm.
+#
+#   client -> Envoy (ext_proc, FULL_DUPLEX_STREAMED)
+#               -> IPP  [llm-d-sc-scorer -> model-selector -> max-score-picker
+#                        -> body-field-to-header]
+#                    \-> llm-d-sc  (gRPC Classify)
+#          -> backend chosen by X-Gateway-Model-Name
+#
+# This is the arm the earlier campaign could not run: llm-d's payload path WITH
+# semantic classification, versus the bare EPP gateway measured without it.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: ipp-models, namespace: cnuland-dev}
+data:
+  models.json: |
+    {"models": [{"name": "tier-small"}, {"name": "tier-large"}]}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: ipp-config, namespace: cnuland-dev}
+data:
+  ipp-config.yaml: |
+    apiVersion: llm-d.ai/v1alpha1
+    kind: PayloadProcessorConfig
+    plugins:
+    - type: llm-d-sc-scorer
+      parameters:
+        endpoint: "llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+        signal: ""
+        timeout_ms: 1000
+        default_model: "tier-small"
+        min_score: 0.0
+        routes:
+          SIMPLE: "tier-small"
+          MEDIUM: "tier-small"
+          COMPLEX: "tier-large"
+          REASONING: "tier-large"
+    - type: model-selector
+    - type: max-score-picker
+    - type: body-field-to-header
+      parameters:
+        fieldName: model
+        headerName: X-Gateway-Model-Name
+    - type: model-config-datasource
+      parameters:
+        modelsPath: /etc/llm-d/models.json
+    datalayer:
+      datasources:
+      - pluginRef: model-config-datasource
+    profiles:
+    - name: default
+      plugins:
+        request:
+        - pluginRef: model-selector
+        - pluginRef: llm-d-sc-scorer
+          weight: 1.0
+        - pluginRef: max-score-picker
+        - pluginRef: body-field-to-header
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ipp
+  namespace: cnuland-dev
+  labels: {app: ipp, component: ipp}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ipp}}
+  template:
+    metadata:
+      labels: {app: ipp, component: ipp}
+    spec:
+      nodeSelector: {kubernetes.io/hostname: gf48cf2}
+      containers:
+        - name: ipp
+          image: debian:bookworm-slim
+          command: ["/work/bin/scorer-runner"]
+          args:
+            - "--config-file=/etc/ipp/ipp-config.yaml"
+            - "--grpc-port=9004"
+            - "--grpc-health-port=9005"
+            - "--metrics-port=9090"
+            # Plaintext h2c on 9004 so Envoy's ext_proc cluster can reach it
+            # without TLS; no OTLP collector here; metrics auth would otherwise
+            # require a TokenReview the benchmark has no use for.
+            - "--secure-serving=false"
+            - "--tracing=false"
+            - "--metrics-endpoint-auth=false"
+          ports:
+            - {containerPort: 9004, name: grpc}
+            - {containerPort: 9005, name: health}
+            - {containerPort: 9090, name: metrics}
+          volumeMounts:
+            - {name: work, mountPath: /work, readOnly: true}
+            - {name: cfg, mountPath: /etc/ipp}
+            - {name: models, mountPath: /etc/llm-d}
+          readinessProbe:
+            grpc: {port: 9005}
+            initialDelaySeconds: 5
+            periodSeconds: 3
+          resources:
+            requests: {cpu: "8", memory: 4Gi}
+            limits: {cpu: "16", memory: 16Gi}
+      volumes:
+        - {name: work, persistentVolumeClaim: {claimName: bench-workspace, readOnly: true}}
+        - {name: cfg, configMap: {name: ipp-config}}
+        - {name: models, configMap: {name: ipp-models}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: ipp, namespace: cnuland-dev}
+spec:
+  selector: {app: ipp}
+  ports:
+    - {name: grpc, port: 9004, targetPort: 9004, appProtocol: http2}
+    - {name: health, port: 9005, targetPort: 9005}
+    - {name: metrics, port: 9090, targetPort: 9090}

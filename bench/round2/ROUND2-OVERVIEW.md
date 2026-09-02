@@ -34,20 +34,40 @@ The single most useful comparison in this campaign. Both gateways front the
 | **Backend direct (ceiling)** | n/a | 256 | **47,589** | 2,855,350 | 8.08 ms | 100 % |
 | **Praxis + llm-d-sc classification** | **yes** | 128 | **37,738** | 2,264,276 | 6.27 ms | **79 %** |
 | **llm-d inference gateway (EPP)** | **no** | 32 | **11,296** | 677,744 | 6.38 ms | **24 %** |
+| **llm-d IPP + llm-d-sc** (`ext_proc`→IPP) | **yes** | 256 | **59,925** | 3,595,473 | 9.33 ms | — |
+| llm-d IPP control (no `ext_proc`) | no | 512 | 126,708 | 7,602,463 | 7.98 ms | — |
 
-**The llm-d arm contains no llm-d-sc.** There is no integration to benchmark yet
-(see *What is still open*), so it measures the bare llm-d inference gateway: Envoy
-plus an EPP running `queue-scorer`, `prefix-cache-scorer` and
-`active-request-scorer` against live pod metrics. Verified rather than assumed —
-the EPP plugin config and args contain zero references to llm-d-sc or
-classification, while the Praxis chain carries `filter: llm_d_sc`.
+> The two IPP rows exceed the 47,589 req/s backend ceiling measured earlier
+> because that ceiling was taken against **three** `vcr-small` replicas at 200 ms
+> on the large tier; the IPP arms ran with both tiers at 0 ms simulated latency.
+> Compare IPP rows to each other, and Praxis rows to each other.
+
+**Two different llm-d paths are measured, and only one carries llm-d-sc.**
+
+* **llm-d inference gateway (EPP)** — Istio Gateway → InferencePool → EPP running
+  `queue-scorer`, `prefix-cache-scorer`, `active-request-scorer` against live pod
+  metrics. **No llm-d-sc**: verified, not assumed — the EPP plugin config and args
+  contain zero references to it.
+* **llm-d IPP + llm-d-sc** — the `llm-d-ipp-scorer` POC
+  ([llm-d-inference-payload-processor#299](https://github.com/llm-d/llm-d-inference-payload-processor/issues/299)):
+  Envoy `ext_proc` → IPP → llm-d-sc gRPC, where the `llm-d-sc-scorer` plugin
+  classifies the prompt and scores candidate models. **This is llm-d WITH
+  llm-d-sc**, and it is the strongest-performing classified path in the campaign.
 
 That asymmetry cuts **against** Praxis in the table, so read it two ways:
 
-* **Like for like (neither classifying):** Praxis control 65,901 req/s vs llm-d
-  11,296 req/s — a **5.8× gap**.
+* **Like for like (neither classifying):** Praxis control 65,901 req/s vs the
+  llm-d EPP gateway's 11,296 req/s — a **5.8× gap**.
 * **Praxis handicapped:** Praxis running full semantic classification (37,738)
-  is still **3.3× faster than llm-d doing no classification at all**.
+  is still **3.3× faster than the EPP gateway doing no classification at all**.
+* **But llm-d's IPP path beats both.** Envoy `ext_proc` → IPP → llm-d-sc reaches
+  **59,925 req/s while classifying** — more than Praxis's classified 37,738 and
+  more than five times the EPP gateway. Two things make that comparison
+  uncomfortable rather than decisive, and both are stated rather than buried:
+  the IPP arm ran with both simulated tiers at 0 ms while the earlier ceiling was
+  taken with one tier at 200 ms; and it did so on **less CPU** (Envoy 4 req/12
+  limit + IPP 8/16, against Praxis 16/32). A CPU-matched rerun is the honest next
+  step before treating this as a verdict on either proxy.
 
 Neither reading is a like-for-like *routing-quality* comparison: llm-d's EPP picks
 an endpoint from live queue-depth and prefix-cache state, which Praxis's static
@@ -305,14 +325,12 @@ llm-d context sensitivity is steeper than Praxis's cached path: 9,597 req/s at
 
 ## What is still open
 
-* **llm-d-sc is not yet integrated with llm-d.** The llm-d arm measures the llm-d
-  gateway itself (EPP endpoint selection). No integration PR was found in
-  `llm-d/llm-d`, `praxis-proxy/praxis`, any `llm-d-incubation` repository, or
-  `inference-payload-processor-rs`. The natural insertion point is an ext_proc
-  filter ahead of the EPP -- the same shape as the vLLM SR adapter, which is now
-  a working precedent for it. Until that exists, **every llm-d number here is
-  llm-d WITHOUT llm-d-sc**, and the campaign cannot say what classification would
-  cost on that gateway.
+* **The EPP gateway arm still has no llm-d-sc**, and the IPP arm is a different
+  insertion point (payload processor, not endpoint picker). Classification cost
+  *on the EPP path specifically* remains unmeasured.
+* **CPU parity between the gateways was not controlled.** Praxis ran on 16 req/32
+  limit; Envoy+IPP on 4/12 and 8/16. The IPP path's advantage may be partly or
+  wholly a proxy-efficiency difference rather than an architectural one.
 * **No PR raised** for the vLLM SR adapter. It works and is benchmarked here, but
   upstreaming it needs a decision on where the softmax belongs: in an adapter, or
   as an optional normalised-score mode in llm-d-sc itself.

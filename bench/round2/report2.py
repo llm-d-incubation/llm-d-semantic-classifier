@@ -110,6 +110,13 @@ def main():
          lambda r: r["label"].replace("l3-", ""),
          "How many endpoints the EPP selects between."),
         ("l4-", "L4 — llm-d soak", lambda r: r["label"].replace("l4-", ""), ""),
+        ("i1-", "I1 — llm-d (IPP) WITH llm-d-sc: paired ladder vs control",
+         lambda r: r["label"].replace("i1-ipp-", ""),
+         "The llm-d-ipp-scorer POC (llm-d-inference-payload-processor#299): "
+         "Envoy ext_proc -> IPP -> llm-d-sc. `control` is the same Envoy with the "
+         "ext_proc filter removed, so the delta is classification alone."),
+        ("i2-", "I2 — llm-d (IPP) WITH llm-d-sc: context size",
+         lambda r: r["label"].replace("i2-ipp-", ""), ""),
         ("v1-", "V1 — vLLM Semantic Router adapter (http_classify), cached",
          lambda r: r["label"].replace("v1-vsr-cached-", ""),
          "llm-d-sc served over vLLM SR's `http_classify` contract. Every response is "

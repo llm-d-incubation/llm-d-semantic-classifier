@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "label": "i2-ipp-cached-ctx016384",
+  "mode": "http",
+  "targets": [
+    "http://ipp-envoy.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 64,
+  "connections": 64,
+  "context_bytes": 16384,
+  "cache_mode": "hit",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 85353,
+  "warmup_requests": 2000,
+  "measured_requests": 390828,
+  "wall_secs": 20.001180393,
+  "throughput_rps": 19540.246741476407,
+  "throughput_rpm": 1172414.8044885844,
+  "offered_concurrency": 64,
+  "implied_mean_ms": 3.2752912922103836,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 390828
+  },
+  "latency": {
+    "count": 390828,
+    "min_ms": 1.355773,
+    "mean_ms": 3.2718652854810815,
+    "stddev_ms": 0.8096163767275062,
+    "p50_ms": 3.156995,
+    "p90_ms": 4.178531,
+    "p95_ms": 4.522388,
+    "p99_ms": 5.383964,
+    "p999_ms": 10.565971,
+    "max_ms": 15.182631
+  },
+  "started_unix": 1788385354
+}

@@ -1,0 +1,172 @@
+# Envoy front end for the IPP + llm-d-sc-scorer arm.
+#
+# Adapted from llm-d-ipp-scorer's deploy/k8s/33-configmap-envoy.yaml, repointed at
+# waldorf's vllm-vcr backends and stripped of the homelab credential injection.
+#
+# :8080  ext_proc -> IPP (classification decides X-Gateway-Model-Name)
+# :8081  identical route table, NO ext_proc -- the control arm, so the delta is
+#        the cost of classification and nothing else.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: ipp-envoy, namespace: cnuland-dev}
+data:
+  envoy.yaml: |
+    admin:
+      address: {socket_address: {address: 0.0.0.0, port_value: 9901}}
+    static_resources:
+      listeners:
+      - name: classified
+        address: {socket_address: {address: 0.0.0.0, port_value: 8080}}
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: classified
+              route_config:
+                name: r
+                virtual_hosts:
+                - name: llm
+                  domains: ["*"]
+                  routes:
+                  - name: route-large
+                    match:
+                      prefix: "/"
+                      headers:
+                      - name: X-Gateway-Model-Name
+                        string_match: {exact: "tier-large"}
+                    route: {cluster: tier_large, timeout: 300s}
+                  - name: route-small
+                    match:
+                      prefix: "/"
+                      headers:
+                      - name: X-Gateway-Model-Name
+                        string_match: {exact: "tier-small"}
+                    route: {cluster: tier_small, timeout: 300s}
+                  - name: route-default
+                    match: {prefix: "/"}
+                    route: {cluster: tier_small, timeout: 300s}
+              http_filters:
+              - name: envoy.filters.http.ext_proc
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                  grpc_service:
+                    envoy_grpc: {cluster_name: ipp}
+                    timeout: 10s
+                  # FULL_DUPLEX_STREAMED, not BUFFERED. IPP defers its headers
+                  # response until the body arrives, and BUFFERED makes Envoy hold
+                  # the body until headers are answered -- a deadlock. This is the
+                  # gotcha raised with maintainers in llm-d-inference-payload-processor#299.
+                  processing_mode:
+                    request_header_mode: SEND
+                    request_body_mode: FULL_DUPLEX_STREAMED
+                    # Envoy REQUIRES request_trailer_mode: SEND whenever
+                    # request_body_mode is FULL_DUPLEX_STREAMED, and refuses to
+                    # start otherwise. Second version-coupled requirement in this
+                    # filter, after the enum itself not existing before v1.34.
+                    request_trailer_mode: SEND
+                    response_header_mode: SKIP
+                    response_body_mode: NONE
+              - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      - name: control
+        address: {socket_address: {address: 0.0.0.0, port_value: 8081}}
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: control
+              route_config:
+                name: r
+                virtual_hosts:
+                - name: llm
+                  domains: ["*"]
+                  routes:
+                  - name: route-default
+                    match: {prefix: "/"}
+                    route: {cluster: tier_small, timeout: 300s}
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+      - name: ipp
+        type: STRICT_DNS
+        connect_timeout: 5s
+        # ext_proc is gRPC: the cluster must speak HTTP/2 explicitly.
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            explicit_http_config: {http2_protocol_options: {}}
+        load_assignment:
+          cluster_name: ipp
+          endpoints:
+          - lb_endpoints:
+            - endpoint: {address: {socket_address: {address: ipp.cnuland-dev.svc.cluster.local, port_value: 9004}}}
+      - name: tier_small
+        type: STRICT_DNS
+        connect_timeout: 5s
+        load_assignment:
+          cluster_name: tier_small
+          endpoints:
+          - lb_endpoints:
+            - endpoint: {address: {socket_address: {address: vcr-small.cnuland-dev.svc.cluster.local, port_value: 8000}}}
+      - name: tier_large
+        type: STRICT_DNS
+        connect_timeout: 5s
+        load_assignment:
+          cluster_name: tier_large
+          endpoints:
+          - lb_endpoints:
+            - endpoint: {address: {socket_address: {address: vcr-large.cnuland-dev.svc.cluster.local, port_value: 8000}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ipp-envoy
+  namespace: cnuland-dev
+  labels: {app: ipp-envoy, component: ipp}
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: on a node at capacity the outgoing pod's CPU
+  # reservation blocks the incoming one and the rollout deadlocks.
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: ipp-envoy}}
+  template:
+    metadata:
+      labels: {app: ipp-envoy, component: ipp}
+    spec:
+      nodeSelector: {kubernetes.io/hostname: gf48cf2}
+      containers:
+        - name: envoy
+          # v1.34: FULL_DUPLEX_STREAMED does not exist in v1.31 and Envoy
+          # fails closed on the unknown enum ("unknown enum value"), so the
+          # version is part of the integration contract, not a detail.
+          image: envoyproxy/envoy:v1.34-latest
+          args: ["-c", "/etc/envoy/envoy.yaml", "--concurrency", "8", "--log-level", "warn"]
+          ports:
+            - {containerPort: 8080, name: classified}
+            - {containerPort: 8081, name: control}
+            - {containerPort: 9901, name: admin}
+          volumeMounts: [{name: cfg, mountPath: /etc/envoy}]
+          readinessProbe:
+            httpGet: {path: /ready, port: 9901}
+            initialDelaySeconds: 5
+            periodSeconds: 3
+          resources:
+            requests: {cpu: "4", memory: 4Gi}
+            limits: {cpu: "12", memory: 16Gi}
+      volumes:
+        - {name: cfg, configMap: {name: ipp-envoy}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: ipp-envoy, namespace: cnuland-dev}
+spec:
+  selector: {app: ipp-envoy}
+  ports:
+    - {name: classified, port: 8080, targetPort: 8080}
+    - {name: control, port: 8081, targetPort: 8081}
+    - {name: admin, port: 9901, targetPort: 9901}
