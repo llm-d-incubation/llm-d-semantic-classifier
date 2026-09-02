@@ -207,16 +207,29 @@ This is confirmed by the route-count sweep: taxonomies of 40, 48 and 50 anchors
 all produce ~66 req/s on the miss path. Ranking is free at this scale, so there
 is nothing for the semantic cache to save.
 
-### When it *would* pay off
+### The "large taxonomy" escape hatch was tested, and it does not exist
 
-Semantic caching pays only when `rank_cost / embed_cost` stops being negligible:
+The obvious counter-argument is that ranking must eventually get expensive
+enough to be worth caching. It was tested directly with synthetic taxonomies from
+48 to 2,000 anchors (4 labels, 12–500 anchors each). Cache-miss throughput:
 
-* **Large taxonomies** — thousands of anchors/routes, where ranking becomes a
-  real fraction of the request.
-* **A cheaper embedder** — if embedding dropped toward the cost of ranking.
-* **Sharing across replicas** — an L2 hit on replica B for work replica A did.
-  This is real value the single-replica arms here cannot show, and it is worth a
-  dedicated multi-replica cold-start test.
+| Anchors | exact req/s | redis-semantic req/s | p50 (exact) |
+|---:|---:|---:|---:|
+| 48 | 67 | 65 | 478.9 ms |
+| 200 | 67 | 67 | 477.8 ms |
+| 800 | 67 | 67 | 477.9 ms |
+| **2,000** | **67** | **67** | 482.1 ms |
+
+**Perfectly flat.** A 42× increase in route count costs nothing measurable,
+because ranking is still negligible beside a ~480 ms embedding. There is no
+realistic route count at which the semantic cache's saving becomes material.
+
+So it pays off only if one of these changes:
+
+* **A much cheaper embedder** — if embedding dropped toward the cost of ranking.
+* **Sharing across replicas** — an L2 hit on replica B for work replica A already
+  did. This is real value the single-replica arms here cannot show, and it is the
+  one case worth a dedicated multi-replica cold-start test.
 
 **Recommendation for today: leave `LLM_D_SC_CACHE=exact` (the default).** Turn on
 `redis-semantic` only after a multi-replica cold-start test demonstrates
@@ -230,6 +243,19 @@ could blur borderline prompts. No accuracy evaluation was run. Do not enable it
 in production on latency grounds alone.
 
 ---
+
+## 4b. Route count is free
+
+Ranking is `anchor-topk-mean`: one cosine similarity per anchor. Intuition says
+more routes must cost more. Measured across 48 → 2,000 anchors, cache-miss
+throughput is **flat at 67 req/s** and p50 varies by under 1 %.
+
+**You can add routes without paying for them.** The taxonomy can grow by orders
+of magnitude before ranking shows up next to the embedding. For a routing product
+this is a strong result: route-table richness is not a performance trade-off.
+
+The caveat is accuracy, not speed — more anchors mean more chances for a
+near-miss — but that is a modelling question this campaign did not measure.
 
 ## 5. Context size
 
@@ -349,4 +375,5 @@ Stated plainly, per house rule 7:
 | 5 | **Alarm on fail-open rate**, not just error rate | silent routing loss; §6 |
 | 6 | Keep **`LLM_D_SC_CACHE=exact`** until cross-replica benefit is shown | §4 |
 | 7 | Classify **turn deltas, not documents** | 3× latency + truncation; §5 |
+| 9 | **Add routes freely** — 48→2,000 anchors costs nothing | §4b |
 | 8 | Make `DEFAULT_QUEUE_BOUND` runtime-configurable | operators cannot tune admission; §1a |

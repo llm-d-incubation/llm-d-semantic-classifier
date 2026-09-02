@@ -1,6 +1,6 @@
 # llm-d-sc v0.2-staging — statistical report
 
-Generated from 68 captured runs. Every row is one measured arm; raw per-request samples for each are in `results/raw/<label>.csv`.
+Generated from 84 captured runs. Every row is one measured arm; raw per-request samples for each are in `results/raw/<label>.csv`.
 
 Latency is wall-clock round-trip time measured at the driver, so it includes network transit, transport framing, admission, queue wait and service. Percentiles are nearest-rank, matching `llm-d-sc/src/bench.rs::percentile`. Mean and standard deviation are reported ALONGSIDE the distribution, never instead of it.
 
@@ -111,6 +111,38 @@ CPU limit tracks worker count, so this is worker width, not CPU starvation.
 | complexity | 66 | 3,978 | 482.445 | 499.851 | 504.151 | 523.102 | 558.820 | 584.567 | 482.309 | 15.079 | 0 | 0.000 |
 | cost | 66 | 3,931 | 487.967 | 507.384 | 518.405 | 541.720 | 571.820 | 589.540 | 488.088 | 17.750 | 0 | 0.000 |
 | sensitivity | 66 | 3,979 | 483.846 | 498.978 | 504.055 | 528.519 | 559.012 | 568.667 | 481.812 | 16.374 | 0 | 0.000 |
+
+
+### C7 — Route count: synthetic taxonomies, 48-2000 anchors (miss path)
+
+Ranking is anchor-topk-mean: one cosine similarity per ANCHOR. This sweep asks whether ranking cost ever becomes a meaningful fraction of a request, which is the precondition for the semantic cache to have anything worth saving.
+
+| anchors / cache | req/s | req/min | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | err % |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 00048-exact | 67 | 4,006 | 478.874 | 497.585 | 501.825 | 517.724 | 552.368 | 566.776 | 478.715 | 15.401 | 0 | 0.000 |
+| 00048-redis-semantic | 65 | 3,926 | 488.199 | 504.460 | 514.500 | 536.877 | 569.229 | 575.062 | 488.629 | 15.190 | 0 | 0.000 |
+| 00200-exact | 67 | 4,012 | 477.833 | 496.799 | 501.857 | 526.328 | 549.928 | 553.653 | 477.971 | 15.737 | 0 | 0.000 |
+| 00200-redis-semantic | 67 | 4,034 | 475.758 | 493.694 | 499.377 | 525.509 | 552.441 | 558.634 | 476.030 | 15.895 | 0 | 0.000 |
+| 00800-exact | 67 | 4,014 | 477.873 | 497.876 | 503.798 | 523.750 | 539.376 | 548.229 | 478.225 | 15.634 | 0 | 0.000 |
+| 00800-redis-semantic | 67 | 4,038 | 474.006 | 493.998 | 501.247 | 524.002 | 554.250 | 569.851 | 475.454 | 16.011 | 0 | 0.000 |
+| 02000-exact | 67 | 4,008 | 482.068 | 495.280 | 499.073 | 510.530 | 542.621 | 553.734 | 478.752 | 15.285 | 0 | 0.000 |
+| 02000-redis-semantic | 67 | 4,000 | 481.189 | 499.409 | 505.963 | 536.323 | 565.763 | 577.011 | 479.577 | 18.266 | 0 | 0.000 |
+
+
+### C7 — Route count: synthetic taxonomies, 48-2000 anchors (hit path)
+
+Ranking is anchor-topk-mean: one cosine similarity per ANCHOR. This sweep asks whether ranking cost ever becomes a meaningful fraction of a request, which is the precondition for the semantic cache to have anything worth saving.
+
+| anchors / cache | req/s | req/min | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | err % |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 00048-exact | 153,141 | 9,188,487 | 0.462 | 0.839 | 0.984 | 12.287 | 41.622 | 55.557 | 0.835 | 3.438 | 0 | 0.000 |
+| 00048-redis-semantic | 160,231 | 9,613,830 | 0.541 | 0.906 | 1.044 | 5.206 | 41.462 | 56.823 | 0.798 | 2.565 | 0 | 0.000 |
+| 00200-exact | 117,441 | 7,046,471 | 0.230 | 0.452 | 0.571 | 40.849 | 41.955 | 50.688 | 1.090 | 5.726 | 0 | 0.000 |
+| 00200-redis-semantic | 111,366 | 6,681,934 | 0.220 | 0.417 | 0.538 | 40.882 | 41.960 | 52.726 | 1.149 | 5.974 | 0 | 0.000 |
+| 00800-exact | 119,380 | 7,162,772 | 0.233 | 0.459 | 0.586 | 40.852 | 41.967 | 42.745 | 1.072 | 5.656 | 0 | 0.000 |
+| 00800-redis-semantic | 141,321 | 8,479,283 | 0.269 | 0.538 | 0.663 | 40.650 | 41.913 | 52.417 | 0.905 | 4.860 | 0 | 0.000 |
+| 02000-exact | 84,979 | 5,098,754 | 0.235 | 0.492 | 0.692 | 41.041 | 42.047 | 81.475 | 1.506 | 6.958 | 0 | 0.000 |
+| 02000-redis-semantic | 119,561 | 7,173,652 | 0.244 | 0.484 | 0.601 | 40.807 | 41.919 | 58.706 | 1.070 | 5.587 | 0 | 0.000 |
 
 
 ### C6 — Semantic cache: exact vs redis-semantic

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "label": "c7-a00048-exact-hit",
+  "mode": "grpc",
+  "targets": [
+    "http://llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+  ],
+  "concurrency": 128,
+  "connections": 64,
+  "context_bytes": 256,
+  "cache_mode": "hit",
+  "keyspace": 1,
+  "run_id": 1788367834,
+  "warmup_requests": 2000,
+  "measured_requests": 3062986,
+  "wall_secs": 20.001025381,
+  "throughput_rps": 153141.4485834155,
+  "throughput_rpm": 9188486.91500493,
+  "offered_concurrency": 128,
+  "implied_mean_ms": 0.8358285832086728,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "OK": 3062986
+  },
+  "latency": {
+    "count": 3062986,
+    "min_ms": 0.090437,
+    "mean_ms": 0.8351485171071628,
+    "stddev_ms": 3.438262945861987,
+    "p50_ms": 0.462412,
+    "p90_ms": 0.838659,
+    "p95_ms": 0.984453,
+    "p99_ms": 12.287476,
+    "p999_ms": 41.622055,
+    "max_ms": 55.557397
+  },
+  "started_unix": 1788367834
+}

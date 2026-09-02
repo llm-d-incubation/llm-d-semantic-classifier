@@ -11,7 +11,7 @@ Methodology rule 5: every result carries a manifest. This is it.
 | llm-d-sc commit | `9eb7b58c52e8bfe4eec19a5fe8d1c0403f891d67` |
 | build features | `--release --features redis-semantic` |
 | model | `cnuland/llm-d-sc-complexity` @ `c5f55ef419d268ba843c544dc00988d1e9878044` |
-| taxonomies | complexity (4 labels / 48 anchors), cost (4/40), sensitivity (5/50) |
+| taxonomies | complexity (4 labels / 48 anchors), cost (4/40), sensitivity (5/50), plus synthetic 48/200/800/2000-anchor variants |
 | Praxis | 0.5.2 vendored snapshot + `llm-d-sc-praxis-filter` (branch `poc/phase-a-external`) |
 | endpoints | vllm-vcr `d01e542e72b6ed2dd29a4ee0fd771dce7e9a5d11` + vLLM Rust frontend `vllm-project/vllm@6e448d0` |
 | Redis | `redis/redis-stack-server:7.4.0-v1` (RediSearch `search` module present) |
@@ -20,7 +20,7 @@ Methodology rule 5: every result carries a manifest. This is it.
 | gateway node | `gf48cf2` · endpoints node | `gf49e9c` |
 | driver | `scbench` (this repo, `bench/driver`), closed-loop |
 | percentiles | nearest-rank, identical to `src/bench.rs::percentile` |
-| runs captured | 68 |
+| runs captured | 84 |
 
 ## Raw data
 

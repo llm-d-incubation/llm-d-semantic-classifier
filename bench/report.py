@@ -88,6 +88,17 @@ def main():
             if r5:
                 doc.append(table(r5, "taxonomy", lambda r: r["label"].split("-")[1],
                                  f"C5 — Route/taxonomy size ({m} path)"))
+    if sel(rows, "c7-"):
+        for m in ("miss", "hit"):
+            r7 = [r for r in sel(rows, "c7-") if r["cache_mode"] == m]
+            if r7:
+                doc.append(table(r7, "anchors / cache",
+                                 lambda r: r["label"].replace("c7-a", "").replace("-" + m, ""),
+                                 f"C7 — Route count: synthetic taxonomies, 48-2000 anchors ({m} path)",
+                                 "Ranking is anchor-topk-mean: one cosine similarity per ANCHOR. "
+                                 "This sweep asks whether ranking cost ever becomes a meaningful "
+                                 "fraction of a request, which is the precondition for the semantic "
+                                 "cache to have anything worth saving."))
     if sel(rows, "c6-"):
         doc.append(table(sel(rows, "c6-"), "arm", lambda r: r["label"].replace("c6-", ""),
                          "C6 — Semantic cache: exact vs redis-semantic",
