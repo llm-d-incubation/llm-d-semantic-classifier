@@ -1,0 +1,83 @@
+# llm-d-sc target under test (v0.2-staging).
+#
+# Runs the binary straight off the shared workspace, so every replica is
+# byte-identical and a rebuild does not require a registry round-trip. The
+# campaign varies these knobs and NOTHING else between arms:
+#
+#   replicas                        horizontal scale
+#   LLM_D_SC_INFERENCE_WORKERS      vertical scale (executor threads/replica)
+#   resources.limits.cpu            vertical scale (must be >= workers, or the
+#                                   pool is CPU-starved and the arm measures
+#                                   the wrong thing)
+#   LLM_D_SC_CLASSIFIER             route count (complexity=4 / cost=4 /
+#                                   sensitivity=5 labels; 48/40/50 anchors)
+#   LLM_D_SC_CACHE                  exact (L1 only) | redis-semantic (L1+L2)
+#
+# NOTE on worker width: default_worker_width() is available_parallelism().min(4),
+# so raising the CPU limit ALONE cannot widen the pool past 4. The env var must
+# be set explicitly. That interaction is exactly what Intel's Arena campaign
+# could not see from outside the binary.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-d-sc
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc, component: target}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: llm-d-sc}}
+  template:
+    metadata:
+      labels: {app: llm-d-sc, component: target}
+    spec:
+      # Targets and driver are pinned to DIFFERENT nodes. Co-locating them was
+      # the flaw Intel's corrected campaign existed to remove: a driver sharing
+      # a kernel with its target contends for the same softirq/NIC budget.
+      nodeSelector: {kubernetes.io/hostname: gf41fb2}
+      containers:
+        - name: llm-d-sc
+          image: debian:bookworm-slim
+          command: ["/work/bin/llm-d-sc-server"]
+          env:
+            - {name: LLM_D_SC_MODEL_DIR,  value: /work/models}
+            - {name: LLM_D_SC_CLASSIFIER, value: complexity}
+            - {name: LLM_D_SC_LISTEN,     value: "0.0.0.0:50051"}
+            - {name: LLM_D_SC_INFERENCE_WORKERS, value: "4"}
+            - {name: LLM_D_SC_CACHE,      value: "exact"}
+            - {name: LLM_D_SC_REDIS_URL,  value: "redis://redis.cnuland-dev.svc.cluster.local:6379"}
+          ports: [{containerPort: 50051, name: grpc}]
+          volumeMounts: [{name: work, mountPath: /work, readOnly: true}]
+          readinessProbe:
+            tcpSocket: {port: 50051}
+            initialDelaySeconds: 5
+            periodSeconds: 2
+          resources:
+            requests: {cpu: "4", memory: 4Gi}
+            limits:   {cpu: "4", memory: 8Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace, readOnly: true}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-d-sc
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc, component: target}
+spec:
+  selector: {app: llm-d-sc}
+  ports: [{name: grpc, port: 50051, targetPort: 50051}]
+---
+# Headless service: lets the driver resolve individual Pod IPs for the
+# direct-fan-out arm, so ClusterIP can be isolated as a variable exactly as
+# Intel's paired ClusterIP-vs-direct design did.
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-d-sc-headless
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc, component: target}
+spec:
+  clusterIP: None
+  selector: {app: llm-d-sc}
+  ports: [{name: grpc, port: 50051, targetPort: 50051}]

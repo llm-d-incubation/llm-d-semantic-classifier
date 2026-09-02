@@ -1,0 +1,68 @@
+# Praxis config for the llm-d-sc v0.2-staging benchmark campaign.
+#
+# TWO listeners, identical in every respect except the one thing under test.
+# Methodology rule 2: a "cost of X" figure is only meaningful as a delta between
+# two runs that differ solely in X.
+#
+#   :8080  ai-routing  request_id -> access_log -> llm_d_sc -> load_balancer
+#   :8081  baseline    request_id -> access_log ->             load_balancer
+#
+# Subtracting the two gives the true end-to-end cost of classification-driven
+# routing at the gateway, including the gRPC hop to llm-d-sc -- not an estimate.
+#
+# The backends are vllm-vcr simulated endpoints: a real vLLM Rust frontend over a
+# mock engine-core with configurable TTFT/ITL. They are CPU-only and deliberately
+# FAST, so the gateway and classifier stay the limiting factor rather than the
+# simulated model.
+admin:
+  address: "0.0.0.0:9901"
+  verbose: true
+
+insecure_options:
+  allow_public_admin: true
+
+listeners:
+  - name: http
+    address: "0.0.0.0:8080"
+    filter_chains: [ai-routing]
+  - name: baseline
+    address: "0.0.0.0:8081"
+    filter_chains: [baseline]
+
+filter_chains:
+  # ---- measured arm: classification-driven routing -------------------------
+  - name: ai-routing
+    filters:
+      - filter: request_id
+      - filter: access_log
+      - filter: llm_d_sc
+        endpoint: "llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+        default_cluster: general
+        # 100 ms is the POC default. On the cache-MISS path a real forward takes
+        # ~200 ms, so this deliberately exposes how often routing falls open to
+        # the default cluster under a cold/novel workload -- that is a finding,
+        # not a misconfiguration.
+        timeout_ms: 100
+        routes:
+          - {label: SIMPLE,    cluster: small}
+          - {label: MEDIUM,    cluster: small}
+          - {label: COMPLEX,   cluster: large}
+          - {label: REASONING, cluster: large}
+      - filter: load_balancer
+        clusters:
+          - name: small
+            endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
+          - name: large
+            endpoints: ["vcr-large.cnuland-dev.svc.cluster.local:8000"]
+          - name: general
+            endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
+
+  # ---- control arm: same path, no classification ---------------------------
+  - name: baseline
+    filters:
+      - filter: request_id
+      - filter: access_log
+      - filter: load_balancer
+        clusters:
+          - name: general
+            endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]

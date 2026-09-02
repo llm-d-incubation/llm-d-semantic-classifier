@@ -1,0 +1,68 @@
+# Build the Praxis proxy WITH the llm_d_sc filter compiled in.
+#
+# The praxis workspace is a local vendored 0.5.2 snapshot (no git remote), so its
+# source is staged onto the shared volume rather than cloned. The filter is wired
+# by a single relative path dependency in praxis/server/Cargo.toml
+# (`../../llm-d-sc-praxis-filter`), which resolves on the volume because both
+# trees sit side by side under /work.
+#
+# CARGO_TARGET_DIR points at node-local disk: intermediate build artifacts are
+# thousands of small writes, and doing that against a shared network filesystem
+# is dramatically slower. Only the finished binary is copied back to /work.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: praxis-build
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-bench, component: praxis-build}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app: llm-d-sc-bench, component: praxis-build}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: build
+          image: rust:1-bookworm
+          command: ["/bin/bash", "-euxo", "pipefail", "-c"]
+          args:
+            - |
+              apt-get update
+              apt-get install -y --no-install-recommends protobuf-compiler build-essential git curl pkg-config libssl-dev ca-certificates cmake nasm
+              export CARGO_TARGET_DIR=/build/target
+              mkdir -p /build/target
+              cd /work/praxis
+
+              # The filter depends on praxis-core/praxis-filter by GIT, which
+              # resolves to upstream HEAD (0.5.4, needs yaml_serde ^0.10.7),
+              # while this vendored workspace is 0.5.2 (pins yaml_serde 0.10.4).
+              # Without a [patch] cargo pulls BOTH copies and the two yaml_serde
+              # requirements are unsatisfiable -- and worse, a build that did
+              # resolve would link a filter compiled against a different
+              # praxis-core than the proxy it is loaded into. Redirect the git
+              # coordinates onto the vendored tree so exactly one praxis-core
+              # exists in the graph. The filter's own Cargo.toml documents that a
+              # vendoring consumer is expected to supply this entry.
+              if ! grep -q 'praxis-proxy/praxis"]' Cargo.toml; then
+                printf '\n[patch."https://github.com/praxis-proxy/praxis"]\npraxis-proxy-core   = { path = "core" }\npraxis-proxy-filter = { path = "filter" }\n' >> Cargo.toml
+                echo "added [patch] redirecting praxis git deps to the vendored tree"
+              fi
+
+              cargo build --release -p praxis-proxy
+              mkdir -p /work/bin
+              cp "$CARGO_TARGET_DIR/release/praxis" /work/bin/praxis
+              chmod 0755 /work/bin/praxis
+              /work/bin/praxis --version || true
+              echo PRAXIS-BUILD-OK
+          volumeMounts:
+            - {name: work, mountPath: /work}
+            - {name: build, mountPath: /build}
+          resources:
+            requests: {cpu: "16", memory: 16Gi}
+            limits:   {cpu: "32", memory: 48Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace}
+        - name: build
+          emptyDir: {}

@@ -1,0 +1,134 @@
+# Praxis gateway with the llm_d_sc filter compiled in (built by 02-praxis-build-job).
+#
+# Runs the binary off the shared workspace like every other component, so the
+# thing under test is exactly the artifact the build job produced.
+#
+# :8080 ai-routing (with llm_d_sc)   :8081 baseline (without)   :9901 admin/metrics
+# The two listeners are the measured/control pair -- see bench/praxis/praxis-config.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: praxis-config
+  namespace: cnuland-dev
+  labels: {app: praxis, component: gateway}
+data:
+  praxis.yaml: |
+    # Praxis config for the llm-d-sc v0.2-staging benchmark campaign.
+    #
+    # TWO listeners, identical in every respect except the one thing under test.
+    # Methodology rule 2: a "cost of X" figure is only meaningful as a delta between
+    # two runs that differ solely in X.
+    #
+    #   :8080  ai-routing  request_id -> access_log -> llm_d_sc -> load_balancer
+    #   :8081  baseline    request_id -> access_log ->             load_balancer
+    #
+    # Subtracting the two gives the true end-to-end cost of classification-driven
+    # routing at the gateway, including the gRPC hop to llm-d-sc -- not an estimate.
+    #
+    # The backends are vllm-vcr simulated endpoints: a real vLLM Rust frontend over a
+    # mock engine-core with configurable TTFT/ITL. They are CPU-only and deliberately
+    # FAST, so the gateway and classifier stay the limiting factor rather than the
+    # simulated model.
+    admin:
+      address: "0.0.0.0:9901"
+      verbose: true
+
+    insecure_options:
+      allow_public_admin: true
+
+    listeners:
+      - name: http
+        address: "0.0.0.0:8080"
+        filter_chains: [ai-routing]
+      - name: baseline
+        address: "0.0.0.0:8081"
+        filter_chains: [baseline]
+
+    filter_chains:
+      # ---- measured arm: classification-driven routing -------------------------
+      - name: ai-routing
+        filters:
+          - filter: request_id
+          - filter: access_log
+          - filter: llm_d_sc
+            endpoint: "llm-d-sc.cnuland-dev.svc.cluster.local:50051"
+            default_cluster: general
+            # 100 ms is the POC default. On the cache-MISS path a real forward takes
+            # ~200 ms, so this deliberately exposes how often routing falls open to
+            # the default cluster under a cold/novel workload -- that is a finding,
+            # not a misconfiguration.
+            timeout_ms: 100
+            routes:
+              - {label: SIMPLE,    cluster: small}
+              - {label: MEDIUM,    cluster: small}
+              - {label: COMPLEX,   cluster: large}
+              - {label: REASONING, cluster: large}
+          - filter: load_balancer
+            clusters:
+              - name: small
+                endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
+              - name: large
+                endpoints: ["vcr-large.cnuland-dev.svc.cluster.local:8000"]
+              - name: general
+                endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
+
+      # ---- control arm: same path, no classification ---------------------------
+      - name: baseline
+        filters:
+          - filter: request_id
+          - filter: access_log
+          - filter: load_balancer
+            clusters:
+              - name: general
+                endpoints: ["vcr-small.cnuland-dev.svc.cluster.local:8000"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: praxis
+  namespace: cnuland-dev
+  labels: {app: praxis, component: gateway}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: praxis}}
+  template:
+    metadata:
+      labels: {app: praxis, component: gateway}
+    spec:
+      nodeSelector: {kubernetes.io/hostname: gf48cf2}
+      containers:
+        - name: praxis
+          image: debian:bookworm-slim
+          command: ["/work/bin/praxis", "-c", "/etc/praxis/praxis.yaml"]
+          ports:
+            - {containerPort: 8080, name: http}
+            - {containerPort: 8081, name: baseline}
+            - {containerPort: 9901, name: admin}
+          volumeMounts:
+            - {name: work, mountPath: /work, readOnly: true}
+            - {name: config, mountPath: /etc/praxis}
+          readinessProbe:
+            httpGet: {path: /ready, port: 9901}
+            initialDelaySeconds: 5
+            periodSeconds: 3
+          resources:
+            requests: {cpu: "16", memory: 8Gi}
+            limits:   {cpu: "32", memory: 16Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace, readOnly: true}
+        - name: config
+          configMap: {name: praxis-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: praxis
+  namespace: cnuland-dev
+  labels: {app: praxis, component: gateway}
+spec:
+  selector: {app: praxis}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}
+    - {name: baseline, port: 8081, targetPort: 8081}
+    - {name: admin, port: 9901, targetPort: 9901}

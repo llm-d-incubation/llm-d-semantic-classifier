@@ -1,0 +1,97 @@
+# Full vllm-vcr endpoint stack: UCX -> libnixl (CPU-only) -> vllm-rs -> vllm-vcr.
+#
+# Follows neuralmagic/vllm-vcr's own Dockerfile builder stage, with the same
+# pinned refs, because vllm-vcr replaces ONLY vLLM's engine-core: the thing that
+# actually answers /v1/chat/completions is the vLLM Rust frontend (vllm-rs),
+# built from vllm-project/vllm@6e448d0. No GPU and no model weights are needed --
+# `play` mode synthesises the token stream with configurable TTFT/ITL, which is
+# what makes it a usable latency-accurate stand-in for a real backend.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vcr-full-build
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-bench, component: vcr-full-build}
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels: {app: llm-d-sc-bench, component: vcr-full-build}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: build
+          image: fedora:42
+          command: ["/bin/bash", "-euxo", "pipefail", "-c"]
+          args:
+            - |
+              NIXL_REF=41685d39
+              VLLM_REPO=https://github.com/vllm-project/vllm.git
+              VLLM_REF=6e448d0ea9bf3d88d898b65449ca6dc2aec170ac
+              VLLM_TARGET_VERSION=v0.27.1
+
+              dnf install -y --setopt=install_weak_deps=False \
+                gcc gcc-c++ make cmake meson ninja-build pkgconf-pkg-config git-core \
+                autoconf automake libtool rdma-core-devel numactl-devel libstdc++-devel \
+                clang clang-devel llvm-devel \
+                protobuf-compiler perl-core python3 python3-devel pybind11-devel \
+                openssl-devel protobuf-devel curl ca-certificates findutils which xz
+              dnf clean all
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+              export PATH="/root/.cargo/bin:$PATH"
+              export CARGO_TARGET_DIR=/build/target
+
+              # 1. UCX (Fedora's is too old for current nixl).
+              git clone --depth 1 -b v1.21.x https://github.com/openucx/ucx.git /build/ucx
+              cd /build/ucx && ./autogen.sh
+              ./configure --prefix=/usr/local/ucx --enable-mt --without-cuda --without-rocm --with-verbs --with-rdmacm
+              make -j"$(nproc)" && make install
+
+              # 2. Minimal CPU-only libnixl (UCX plugin only).
+              export PKG_CONFIG_PATH=/usr/local/ucx/lib/pkgconfig
+              git clone https://github.com/ai-dynamo/nixl.git /build/nixl
+              cd /build/nixl && git checkout ${NIXL_REF}
+              meson setup build --prefix=/usr/local --buildtype=release \
+                -Denable_plugins=UCX -Ddisable_gds_backend=true \
+                -Dbuild_tests=false -Dbuild_examples=false -Drust=false \
+                -Ducx_path=/usr/local/ucx
+              ninja -C build install
+              echo /usr/local/ucx/lib >  /etc/ld.so.conf.d/nixl.conf
+              echo /usr/local/lib64   >> /etc/ld.so.conf.d/nixl.conf
+              echo /usr/local/lib     >> /etc/ld.so.conf.d/nixl.conf
+              ldconfig
+              export PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/ucx/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/share/pkgconfig
+              export PROTOC=/usr/bin/protoc PROTOC_INCLUDE=/usr/include
+
+              # 3. vLLM Rust frontend -- this is what serves the OpenAI API.
+              git clone ${VLLM_REPO} /build/vllm
+              cd /build/vllm && git checkout ${VLLM_REF}
+              cd rust && cargo build --release --bin vllm-rs
+              cp "$CARGO_TARGET_DIR/release/vllm-rs" /work/bin/vllm-rs
+
+              # 4. vllm-vcr against the real libnixl.
+              cd /work/vcr/vllm-vcr
+              VLLM_TARGET_VERSION="${VLLM_TARGET_VERSION}" cargo build --release -p vllm-vcr --features nixl
+              cp "$CARGO_TARGET_DIR/release/vllm-vcr" /work/bin/vllm-vcr
+
+              # Runtime shared libs must travel with the binaries.
+              mkdir -p /work/vcr/lib
+              cp -a /usr/local/lib64/libnixl*  /work/vcr/lib/ 2>/dev/null || true
+              cp -a /usr/local/lib/libnixl*    /work/vcr/lib/ 2>/dev/null || true
+              cp -a /usr/local/lib64/plugins   /work/vcr/lib/ 2>/dev/null || true
+              cp -a /usr/local/ucx/lib/*.so*   /work/vcr/lib/ 2>/dev/null || true
+              cp /work/vcr/vllm-vcr/entrypoint.sh /work/vcr/entrypoint.sh
+              chmod 0755 /work/bin/vllm-rs /work/bin/vllm-vcr /work/vcr/entrypoint.sh
+              ls -l /work/bin/vllm-rs /work/bin/vllm-vcr
+              echo VCR-FULL-BUILD-OK
+          volumeMounts:
+            - {name: work, mountPath: /work}
+            - {name: build, mountPath: /build}
+          resources:
+            requests: {cpu: "32", memory: 32Gi}
+            limits:   {cpu: "64", memory: 96Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace}
+        - name: build
+          emptyDir: {}

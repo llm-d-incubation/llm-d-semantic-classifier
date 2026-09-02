@@ -1,0 +1,19 @@
+# Shared benchmark workspace.
+#
+# The campaign needs the SAME llm-d-sc binary and model on every replica while
+# scaling horizontally, so the volume must be ReadWriteMany. `shared-vast` is a
+# shared-filesystem CSI, which lets one build Job produce the artifacts and every
+# target replica mount them read-only -- no container registry in the loop, and
+# no risk of two replicas running subtly different builds.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bench-workspace
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-bench, component: workspace}
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: shared-vast
+  resources:
+    requests:
+      storage: 40Gi

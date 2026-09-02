@@ -1,0 +1,108 @@
+# Simulated inference endpoints: vllm-vcr behind the real vLLM Rust frontend.
+#
+# vllm-rs owns the OpenAI surface (/v1/chat/completions, tokenization, chat
+# templates); vllm-vcr `play` impersonates engine-core over ZMQ and synthesises
+# the token stream with configurable TTFT/ITL. No GPU, no model weights -- only
+# the tokenizer is fetched for MODEL.
+#
+# Two tiers so the gateway has somewhere to route: `small` is fast, `large` is
+# deliberately slower, which is what makes a routing decision observable in the
+# end-to-end latency rather than just in a counter.
+#
+# Latency is set LOW on purpose. The campaign measures the gateway and the
+# classifier; if the simulated backend dominated the response time it would mask
+# exactly the costs we are trying to isolate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vcr-small
+  namespace: cnuland-dev
+  labels: {app: vcr-small, component: endpoint, tier: small}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: vcr-small}}
+  template:
+    metadata:
+      labels: {app: vcr-small, component: endpoint, tier: small}
+    spec:
+      nodeSelector: {kubernetes.io/hostname: gf49e9c}
+      containers:
+        - name: vcr
+          image: fedora:42
+          command: ["/bin/bash", "-c"]
+          args: ["export PATH=/work/bin:$PATH LD_LIBRARY_PATH=/work/vcr/lib:$LD_LIBRARY_PATH; exec /work/vcr/entrypoint.sh"]
+          env:
+            - {name: MODEL, value: "Qwen/Qwen2.5-0.5B-Instruct"}
+            - {name: SERVED_MODEL_NAME, value: "router-model"}
+            - {name: MOCK_TTFT_MS, value: "5"}
+            - {name: MOCK_ITL_MS, value: "1"}
+            - {name: VLLM_PORT, value: "8000"}
+            - {name: MOCK_HANDSHAKE_PORT, value: "29550"}
+            - {name: VLLM_EXTRA_ARGS, value: "--reasoning-parser none --tool-call-parser none"}
+            - {name: POD_IP, valueFrom: {fieldRef: {fieldPath: status.podIP}}}
+            - {name: POD_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+          ports: [{containerPort: 8000, name: http}]
+          volumeMounts: [{name: work, mountPath: /work}]
+          resources:
+            requests: {cpu: "8", memory: 8Gi}
+            limits:   {cpu: "16", memory: 16Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vcr-small
+  namespace: cnuland-dev
+spec:
+  selector: {app: vcr-small}
+  ports: [{name: http, port: 8000, targetPort: 8000}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vcr-large
+  namespace: cnuland-dev
+  labels: {app: vcr-large, component: endpoint, tier: large}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: vcr-large}}
+  template:
+    metadata:
+      labels: {app: vcr-large, component: endpoint, tier: large}
+    spec:
+      nodeSelector: {kubernetes.io/hostname: gf49e9c}
+      containers:
+        - name: vcr
+          image: fedora:42
+          command: ["/bin/bash", "-c"]
+          args: ["export PATH=/work/bin:$PATH LD_LIBRARY_PATH=/work/vcr/lib:$LD_LIBRARY_PATH; exec /work/vcr/entrypoint.sh"]
+          env:
+            - {name: MODEL, value: "Qwen/Qwen2.5-0.5B-Instruct"}
+            - {name: SERVED_MODEL_NAME, value: "router-model"}
+            # The "big model costs more" signal, made measurable.
+            - {name: MOCK_TTFT_MS, value: "25"}
+            - {name: MOCK_ITL_MS, value: "4"}
+            - {name: VLLM_PORT, value: "8000"}
+            - {name: MOCK_HANDSHAKE_PORT, value: "29550"}
+            - {name: VLLM_EXTRA_ARGS, value: "--reasoning-parser none --tool-call-parser none"}
+            - {name: POD_IP, valueFrom: {fieldRef: {fieldPath: status.podIP}}}
+            - {name: POD_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+          ports: [{containerPort: 8000, name: http}]
+          volumeMounts: [{name: work, mountPath: /work}]
+          resources:
+            requests: {cpu: "8", memory: 8Gi}
+            limits:   {cpu: "16", memory: 16Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vcr-large
+  namespace: cnuland-dev
+spec:
+  selector: {app: vcr-large}
+  ports: [{name: http, port: 8000, targetPort: 8000}]

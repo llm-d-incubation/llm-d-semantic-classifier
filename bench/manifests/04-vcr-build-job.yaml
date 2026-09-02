@@ -1,0 +1,59 @@
+# Build vllm-vcr (+ the vLLM Rust frontend it ships with) for the simulated
+# inference endpoints behind Praxis.
+#
+# vllm-vcr replaces only vLLM's engine-core over ZMQ -- it cannot serve HTTP by
+# itself -- so the frontend is what actually answers /v1/chat/completions and
+# must be built alongside it. Their Dockerfile pairs the two for exactly this
+# reason. CPU-only: `play` mode needs no GPU and no model weights.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vcr-build
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-bench, component: vcr-build}
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels: {app: llm-d-sc-bench, component: vcr-build}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: build
+          image: rust:1-bookworm
+          command: ["/bin/bash", "-euxo", "pipefail", "-c"]
+          args:
+            - |
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                build-essential git curl pkg-config libssl-dev ca-certificates cmake protobuf-compiler
+              export CARGO_TARGET_DIR=/build/target
+              mkdir -p /build/target /work/vcr
+              cd /work/vcr
+              rm -rf vllm-vcr
+              git clone --depth 1 https://github.com/neuralmagic/vllm-vcr.git
+              cd vllm-vcr
+              git rev-parse HEAD > /work/vcr/VCR-COMMIT.txt
+              # Record the shape of the tree so the run wiring can be derived
+              # without guessing at binary names.
+              ls -1 > /work/vcr/TREE.txt
+              cat Cargo.toml > /work/vcr/CARGO.txt 2>/dev/null || true
+              cat entrypoint.sh > /work/vcr/ENTRYPOINT.txt 2>/dev/null || true
+              cargo build --release --locked 2>&1 | tail -40 || cargo build --release 2>&1 | tail -40
+              mkdir -p /work/bin
+              find "$CARGO_TARGET_DIR/release" -maxdepth 1 -type f -perm -111 \
+                   ! -name '*.so' ! -name '*.d' -print | tee /work/vcr/BINARIES.txt
+              for b in $(cat /work/vcr/BINARIES.txt); do cp "$b" /work/bin/ || true; done
+              chmod 0755 /work/bin/* || true
+              echo VCR-BUILD-OK
+          volumeMounts:
+            - {name: work, mountPath: /work}
+            - {name: build, mountPath: /build}
+          resources:
+            requests: {cpu: "16", memory: 16Gi}
+            limits:   {cpu: "48", memory: 64Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace}
+        - name: build
+          emptyDir: {}

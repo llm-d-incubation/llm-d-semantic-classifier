@@ -1,0 +1,31 @@
+# The load driver pod.
+#
+# Pinned to gd91fda while targets run on gf41fb2. Driver/target co-location was
+# the exact flaw Intel's corrected Arena campaign removed: a driver sharing a
+# kernel with its target contends for the same softirq/NIC budget, so the
+# "target" latency it reports is partly its own.
+#
+# Sized generously (32 cores) so the DRIVER is never the limiter. Every run
+# reports implied_mean_ms (concurrency/throughput, i.e. Little's law) next to the
+# measured mean; if those diverge materially the driver was the bottleneck and
+# the run is void.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-driver
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-bench, component: driver}
+spec:
+  restartPolicy: Never
+  nodeSelector: {kubernetes.io/hostname: gd91fda}
+  containers:
+    - name: driver
+      image: debian:bookworm-slim
+      command: ["sleep", "infinity"]
+      volumeMounts: [{name: work, mountPath: /work}]
+      resources:
+        requests: {cpu: "16", memory: 8Gi}
+        limits:   {cpu: "32", memory: 16Gi}
+  volumes:
+    - name: work
+      persistentVolumeClaim: {claimName: bench-workspace}

@@ -1,0 +1,47 @@
+# Build the scbench load driver onto the shared workspace.
+#
+# The driver must be able to saturate the target, so it is a release build with
+# fat LTO. It runs on a DIFFERENT node than the targets; a driver sharing a
+# kernel with its target competes for the same softirq and NIC budget, which was
+# precisely the flaw Intel's corrected Arena campaign was built to remove.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: driver-build
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-bench, component: driver-build}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app: llm-d-sc-bench, component: driver-build}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: build
+          image: rust:1-bookworm
+          command: ["/bin/bash", "-euxo", "pipefail", "-c"]
+          args:
+            - |
+              apt-get update
+              apt-get install -y --no-install-recommends protobuf-compiler build-essential pkg-config ca-certificates
+              export CARGO_TARGET_DIR=/build/target
+              mkdir -p /build/target
+              cd /work/driver
+              cargo build --release
+              mkdir -p /work/bin
+              cp "$CARGO_TARGET_DIR/release/scbench" /work/bin/scbench
+              chmod 0755 /work/bin/scbench
+              /work/bin/scbench --help | head -5
+              echo DRIVER-BUILD-OK
+          volumeMounts:
+            - {name: work, mountPath: /work}
+            - {name: build, mountPath: /build}
+          resources:
+            requests: {cpu: "8", memory: 8Gi}
+            limits:   {cpu: "16", memory: 16Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace}
+        - name: build
+          emptyDir: {}

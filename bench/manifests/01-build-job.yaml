@@ -1,0 +1,67 @@
+# Build the llm-d-sc v0.2-staging binary + fetch the ModelCar artifacts onto the
+# shared workspace.
+#
+# Built IN-CLUSTER on purpose: the nodes are amd64 and the dev laptop is arm64,
+# so a local cross-build of Candle would run under emulation. A 128-core node
+# does it natively in a couple of minutes. Output lands on the RWX volume, so
+# every target replica runs a byte-identical binary with no registry in the loop.
+#
+# `redis-semantic` is enabled so the L2 semantic cache can be toggled at RUNTIME
+# (LLM_D_SC_CACHE=exact|redis-semantic) across campaign arms without rebuilding.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bench-build
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-bench, component: build}
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels: {app: llm-d-sc-bench, component: build}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: build
+          image: rust:1-bookworm
+          command: ["/bin/bash", "-euxo", "pipefail", "-c"]
+          args:
+            - |
+              apt-get update
+              apt-get install -y --no-install-recommends protobuf-compiler build-essential git curl ca-certificates
+              cd /work
+              rm -rf src-llm-d-sc
+              git clone --depth 1 --branch v0.2-staging \
+                https://github.com/llm-d-incubation/llm-d-semantic-classifier.git src-llm-d-sc
+              cd src-llm-d-sc
+              git rev-parse HEAD > /work/BUILD-COMMIT.txt
+              # Release build WITH the semantic tier compiled in.
+              cargo build --release --locked --features redis-semantic \
+                --bin llm-d-sc-server --bin llm-d-sc-classify
+              mkdir -p /work/bin
+              cp target/release/llm-d-sc-server   /work/bin/
+              cp target/release/llm-d-sc-classify /work/bin/
+              chmod 0755 /work/bin/*
+              # Classifier taxonomy definitions (the "routes" dimension input).
+              mkdir -p /work/classifiers && cp classifiers/*.json /work/classifiers/
+              # ModelCar artifacts, pulled straight from HF (no hub client needed).
+              REPO=cnuland/llm-d-sc-complexity
+              REV=c5f55ef419d268ba843c544dc00988d1e9878044
+              mkdir -p /work/models/1_Pooling
+              for f in model.safetensors tokenizer.json config.json modules.json 1_Pooling/config.json; do
+                curl -fsSL -o "/work/models/$f" \
+                  "https://huggingface.co/${REPO}/resolve/${REV}/${f}"
+              done
+              # Readable+traversable by an arbitrary UID.
+              find /work/models -type d -exec chmod 0755 {} +
+              find /work/models -type f -exec chmod 0644 {} +
+              echo "commit=$(cat /work/BUILD-COMMIT.txt)" | tee /work/BUILD-INFO.txt
+              ls -l /work/bin /work/models >> /work/BUILD-INFO.txt
+              echo BUILD-OK
+          volumeMounts: [{name: work, mountPath: /work}]
+          resources:
+            requests: {cpu: "16", memory: 16Gi}
+            limits:   {cpu: "32", memory: 32Gi}
+      volumes:
+        - name: work
+          persistentVolumeClaim: {claimName: bench-workspace}

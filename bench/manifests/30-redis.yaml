@@ -1,0 +1,42 @@
+# Redis Stack backs the L2 semantic cache (RediSearch vector KNN).
+#
+# Plain `redis:7` will NOT work: the L2 tier issues FT.CREATE / FT.SEARCH
+# vector-KNN commands, which live in the RediSearch module that only Redis Stack
+# ships. On plain Redis every L2 op fails, the circuit breaker opens, and the arm
+# silently degrades to exact-only -- i.e. it would look like "semantic cache
+# gives no benefit" when in truth it never ran.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: cnuland-dev
+  labels: {app: redis, component: cache}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: redis}}
+  template:
+    metadata:
+      labels: {app: redis, component: cache}
+    spec:
+      nodeSelector: {kubernetes.io/hostname: gf41fb2}
+      containers:
+        - name: redis
+          image: redis/redis-stack-server:7.4.0-v1
+          ports: [{containerPort: 6379, name: redis}]
+          readinessProbe:
+            tcpSocket: {port: 6379}
+            initialDelaySeconds: 5
+            periodSeconds: 3
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits:   {cpu: "8", memory: 16Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: cnuland-dev
+  labels: {app: redis, component: cache}
+spec:
+  selector: {app: redis}
+  ports: [{name: redis, port: 6379, targetPort: 6379}]
