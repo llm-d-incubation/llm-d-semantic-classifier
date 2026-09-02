@@ -39,6 +39,31 @@ The single most useful comparison in this campaign. Both gateways front the
 inference gateway** on this hardware, and reaches 79 % of what the backends can
 absorb unaided.
 
+> **Do not add the vLLM SR adapter to this table.** An earlier revision listed it
+> here and it was misread as a faster gateway. It is not a gateway: it classifies
+> and returns, and never contacts a backend. The tell is that it measures
+> **53,171 req/s — above the 47,589 req/s backend ceiling.** Nothing that has to
+> proxy to those backends can exceed their capacity, so a number above the
+> ceiling is proof the work is different, not proof the software is faster. Its
+> figures live in their own section below.
+
+### The same classifier, at three levels of work
+
+Comparing like with like makes the picture obvious:
+
+| Path | req/s | What it adds |
+|---|---:|---|
+| llm-d-sc raw gRPC | 302,895 | classification only, binary protocol |
+| llm-d-sc via the HTTP adapter | 53,171 | + HTTP/1.1 and JSON encode/decode (**5.7×**) |
+| Praxis full gateway (classified) | 37,738 | + body buffering, prompt extraction, cluster selection, **backend proxy and response** |
+
+Wire payloads for one request confirm it: the adapter moves 93 B in / 158 B out;
+Praxis moves 162 B in / 580 B out **and** performs a full backend round trip.
+
+Praxis is doing strictly the most work of the three. The figure that would
+actually indict it is its own control listener (65,901 req/s with classification
+removed); the gap to 37,738 is the classification cost compounding under load.
+
 A fair caveat: these gateways are not doing the same job. Praxis's `llm_d_sc`
 filter picks a **cluster** (which model tier should serve this). llm-d's EPP picks
 an **endpoint** (which replica of a pool should serve this) and runs three scoring
@@ -229,10 +254,20 @@ counts an unnormalised 200 as a failure, because the router would.
 On novel prompts the model forward dominates as everywhere else: 97 req/s at
 concurrency 8 (p50 81.2 ms), 117 req/s at 32 (p50 275.8 ms).
 
-This number is **not** comparable to the gateway rows above: the adapter only
-classifies, it does not proxy the inference request. It is the cost of asking
-llm-d-sc a question over HTTP, which is the right figure for sizing vLLM SR's
-remote-classifier budget (its default `llm_timeout_seconds: 5`).
+**These numbers do not measure vLLM Semantic Router, and are not comparable to
+the gateway table.** Two things they are not:
+
+* *Not vLLM SR.* vLLM SR itself was never benchmarked here. This measures the
+  adapter that serves llm-d-sc over its contract — the classifier side of the
+  integration, not the router.
+* *Not a gateway.* The adapter classifies and returns. It never proxies to a
+  backend, which is why it can post 53,171 req/s against a backend ceiling of
+  47,589 req/s — a rate no proxying gateway could reach.
+
+What they *are* good for: sizing vLLM SR's remote-classifier budget. Its default
+`llm_timeout_seconds: 5` is generous against a p99 of 1.37 ms at the knee, but a
+**cache-miss** classification costs 81–276 ms, so a cold or churning working set
+is the case to plan for — the same conclusion the gateway campaigns reached.
 
 ## llm-d: the gateway is the ceiling, not the pool
 
