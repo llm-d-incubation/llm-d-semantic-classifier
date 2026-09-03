@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "label": "r3b-praxis-miss-rate08000-rep0",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 18074,
+  "warmup_requests": 3000,
+  "measured_requests": 200168,
+  "wall_secs": 25.001196291,
+  "throughput_rps": 8006.336883649725,
+  "throughput_rpm": 480380.2130189835,
+  "offered_concurrency": 1024,
+  "load_mode": "open-loop-poisson",
+  "offered_rate_rps": 8000.0,
+  "scheduled_requests": 200167,
+  "sent_requests": 200168,
+  "actual_offer_rps": 8006.296885563699,
+  "offer_attainment": 1.0007871106954624,
+  "completed_rps": 8006.336883649725,
+  "rejected_rps": 0.0,
+  "rate_attainment": 1.0007921104562156,
+  "corpus": "/work/corpus.jsonl",
+  "corpus_count": 200000,
+  "corpus_sha256": "fnv1a64:21771234814b5f1e",
+  "dist": "unique",
+  "premises_passed": false,
+  "premise_notes": [
+    "dist=unique issued 200168 requests against a 200000-utterance corpus: it wrapped 1.0x, so most requests were REPEATS and this arm measures the cache-hit path, not novel prompts"
+  ],
+  "implied_mean_ms": 127.89869011022742,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 200168
+  },
+  "latency": {
+    "count": 200168,
+    "min_ms": 0.625826,
+    "mean_ms": 34.03307269098957,
+    "stddev_ms": 108.44507619575975,
+    "p50_ms": 2.151723,
+    "p90_ms": 3.015161,
+    "p95_ms": 381.585351,
+    "p99_ms": 449.315743,
+    "p999_ms": 475.934161,
+    "max_ms": 517.947236
+  },
+  "started_unix": 1788401520
+}

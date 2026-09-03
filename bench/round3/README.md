@@ -43,3 +43,21 @@ not keep up, so the arm measured the driver rather than the target.
 result JSON, checking rate attainment, a Little's-law cross-check
 (`implied_mean` vs measured mean must agree within 0.7–1.4×, else the driver was
 the limiter), and a minimum sample count for percentile validity.
+
+## Measurement hygiene rules (learned the hard way)
+
+Each of these exists because it was violated and produced a wrong number.
+
+1. **A cache-miss arm must prove it missed.** Check llm-d-sc's own hit/miss
+   counters, do not infer it from the label. An unsalted corpus walk measured a
+   4.4% miss rate while claiming to be 100% novel — a cache-HIT measurement that
+   reported plausible-looking throughput.
+2. **One campaign owns the cluster.** Ad-hoc probes run against a pod that a
+   campaign is driving contaminate both. Wait, or use a separate target.
+3. **Compare only arms that differ in one parameter.** A "salted vs unsalted"
+   comparison at concurrency 64 vs 32 measures concurrency, not salt.
+4. **A knob is not applied until it is observed to change something.** Both
+   `--context-bytes` and `--cache-mode` were silently ignored in corpus mode; the
+   sweeps ran and produced smooth, publishable, meaningless curves.
+5. **Percentiles need samples.** p99.9 from fewer than 1,000 requests is noise;
+   the audit flags it rather than letting it into a table.
