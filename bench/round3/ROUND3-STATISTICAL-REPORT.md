@@ -1,83 +1,145 @@
-# Round 3 — statistical report
-Generated from 261 captured runs across 85 distinct arms, each replicated. Every figure is a median over independent repetitions with a bootstrap 95% CI. `p99.9` reads `n/a` where an arm has fewer than 1,000 measured requests, because it cannot be resolved from that sample.
+# Round 3 — statistical report (corrected data only)
+Generated from 306 captured runs across 100 distinct arms, each replicated. Every figure is a median over independent repetitions with a bootstrap 95% CI. `p99.9` reads `n/a` where an arm has fewer than 1,000 measured requests, because it cannot be resolved from that sample.
 **Traffic:** frozen 200,000-utterance corpus (seed `20260903`), 12 domains, 2 B–18 KB. **Config:** llm-d-sc at 16 workers / `RAYON_NUM_THREADS=1` / 16 CPU — Rayon pinned rather than left to track the CPU limit. **Arrival-rate arms are OPEN-LOOP** (Poisson), so offered rate is independent of response latency.
-## Knees
+## Excluded arms
+These were measured but are retired. They are excluded here so a corrected report cannot be read alongside a withdrawn number; the raw files remain in `data/json/` for anyone checking the correction.
+| arm family | runs excluded | why |
+|---|--:|---|
+| `r3-*-rate*` | 63 | open-loop warmup carry-in inflated every rate by concurrency/window (1024/25 = 40.96 rps); superseded by the corrected r3b sweep |
+| `r3-*-ctx*` | 54 | --context-bytes was ignored in corpus mode, so all six arms sent identical traffic; the sweep measured nothing |
+## Knees (corrected sweep, r3b)
 
 
-**praxis — open-loop arrival-rate sweep**
-
-| offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
-|--:|--:|--:|--:|--:|--:|
-| 250 | 291 | 1.82 | 2.01 | 2.74 | 0 |
-| 500 | 541 | 1.79 | 1.98 | 2.65 | 0 |
-| 1,000 | 1,041 | 1.80 | 2.02 | 2.67 | 0 |
-| 2,000 | 2,041 | 1.92 | 194.21 | 312.14 | 0 |
-| 4,000 | 4,031 | 2.04 | 80.25 | 215.89 | 0 |
-| 8,000 | 8,030 | 2.15 | 81.25 | 206.41 | 0 |
-| 16,000 | 16,029 | 2.44 | 33.44 | 200.31 | 26,036 |
-
-* **Latency knee: between 1,000 and 2,000 rps offered** — p90 goes 2.02 → 194.21 ms (96×) while p50 barely moves. This is the operating limit.
-* Throughput knee: absorbs 8,000 rps error-free (8,030 achieved) — far past the latency knee, and misleading on its own.
-
-
-**llmd — open-loop arrival-rate sweep**
+**praxis-miss — open-loop arrival-rate sweep**
 
 | offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
 |--:|--:|--:|--:|--:|--:|
-| 250 | 291 | 2.11 | 19.80 | 146.09 | 0 |
-| 500 | 541 | 2.07 | 3.16 | 150.56 | 0 |
-| 1,000 | 1,038 | 2.17 | 108.63 | 215.66 | 0 |
-| 2,000 | 2,041 | 2.13 | 188.37 | 291.58 | 0 |
-| 4,000 | 4,030 | 2.25 | 56.38 | 190.51 | 0 |
-| 8,000 | 8,030 | 2.39 | 78.93 | 201.82 | 0 |
-| 16,000 | 16,029 | 2.65 | 41.40 | 177.93 | 0 |
+| 250 | 248 | 28.34 | 42.98 | 71.16 | 0 |
+| 500 | 498 | 536.70 | 581.69 | 607.03 | 0 |
+| 1,000 | 996 | 3.03 | 587.27 | 611.14 | 0 |
+| 2,000 | 1,995 | 1.96 | 580.83 | 607.78 | 0 |
+| 4,000 | 4,000 | 2.00 | 561.84 | 606.63 | 0 |
+| 8,000 | 8,006 | 2.11 | 2.70 | 609.82 | 0 |
 
-* **Latency knee: between 500 and 1,000 rps offered** — p90 goes 3.16 → 108.63 ms (34×) while p50 barely moves. This is the operating limit.
-* Throughput knee: absorbs 16,000 rps error-free (16,029 achieved) — far past the latency knee, and misleading on its own.
+* **Latency knee: between 250 and 500 rps offered** — p90 goes 42.98 → 581.69 ms (14×) while p50 barely moves. This is the operating limit.
+* Throughput knee: absorbs 8,000 rps error-free (8,006 achieved) — far past the latency knee, and misleading on its own.
 
 
-**vsr — open-loop arrival-rate sweep**
+**praxis-mix80 — open-loop arrival-rate sweep**
 
 | offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
 |--:|--:|--:|--:|--:|--:|
-| 250 | 291 | 0.25 | 0.35 | 116.36 | 0 |
-| 500 | 541 | 0.26 | 0.36 | 115.09 | 0 |
-| 1,000 | 1,041 | 0.26 | 0.34 | 116.65 | 0 |
-| 2,000 | 1,901 | 0.32 | 153.67 | 251.70 | 9,806 |
-| 4,000 | 3,024 | 0.42 | 136.00 | 227.26 | 77,869 |
-| 8,000 | 4,919 | 0.50 | 85.09 | 176.68 | 246,571 |
-| 16,000 | 4,415 | 0.63 | 54.68 | 175.67 | 839,063 |
+| 250 | 250 | 1.91 | 2.08 | 2.92 | 0 |
+| 500 | 504 | 1.88 | 2.04 | 2.40 | 0 |
+| 1,000 | 1,001 | 1.89 | 2.06 | 2.45 | 0 |
+| 2,000 | 2,006 | 1.94 | 2.13 | 2.87 | 0 |
+| 4,000 | 4,003 | 2.07 | 62.15 | 99.66 | 0 |
+| 8,000 | 8,001 | 2.26 | 86.12 | 121.24 | 0 |
 
-* **Latency knee: between 1,000 and 2,000 rps offered** — p90 goes 0.34 → 153.67 ms (449×) while p50 barely moves. This is the operating limit.
-* Throughput knee: absorbs 1,000 rps error-free (1,041 achieved) — far past the latency knee, and misleading on its own.
+* **Latency knee: between 2,000 and 4,000 rps offered** — p90 goes 2.13 → 62.15 ms (29×) while p50 barely moves. This is the operating limit.
+* Throughput knee: absorbs 8,000 rps error-free (8,001 achieved) — far past the latency knee, and misleading on its own.
+
+
+**praxis-hit — open-loop arrival-rate sweep**
+
+| offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
+|--:|--:|--:|--:|--:|--:|
+| 250 | 248 | 1.86 | 2.04 | 2.29 | 0 |
+| 500 | 498 | 1.86 | 2.03 | 2.29 | 0 |
+| 1,000 | 996 | 1.86 | 2.04 | 2.62 | 0 |
+| 2,000 | 1,995 | 1.92 | 2.12 | 2.61 | 0 |
+| 4,000 | 4,001 | 1.99 | 2.26 | 2.99 | 0 |
+| 8,000 | 8,006 | 2.13 | 2.56 | 3.21 | 0 |
+* Throughput knee: absorbs 8,000 rps error-free (8,006 achieved) — far past the latency knee, and misleading on its own.
+
+
+**llmd-miss — open-loop arrival-rate sweep**
+
+| offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
+|--:|--:|--:|--:|--:|--:|
+| 250 | 248 | 28.08 | 44.47 | 63.96 | 0 |
+| 500 | 498 | 546.10 | 586.08 | 606.97 | 0 |
+| 1,000 | 996 | 2.99 | 588.48 | 610.65 | 0 |
+| 2,000 | 1,995 | 2.13 | 580.31 | 609.09 | 0 |
+| 4,000 | 4,001 | 2.16 | 563.83 | 604.43 | 0 |
+| 8,000 | 8,006 | 2.24 | 2.94 | 610.37 | 0 |
+
+* **Latency knee: between 250 and 500 rps offered** — p90 goes 44.47 → 586.08 ms (13×) while p50 barely moves. This is the operating limit.
+* Throughput knee: absorbs 8,000 rps error-free (8,006 achieved) — far past the latency knee, and misleading on its own.
+
+
+**llmd-mix80 — open-loop arrival-rate sweep**
+
+| offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
+|--:|--:|--:|--:|--:|--:|
+| 250 | 250 | 2.12 | 2.33 | 3.30 | 0 |
+| 500 | 504 | 2.04 | 2.22 | 2.62 | 0 |
+| 1,000 | 1,002 | 2.06 | 2.27 | 2.89 | 0 |
+| 2,000 | 2,006 | 2.09 | 2.32 | 2.91 | 0 |
+| 4,000 | 4,003 | 2.26 | 61.12 | 100.31 | 0 |
+| 8,000 | 8,001 | 2.44 | 85.55 | 119.10 | 0 |
+
+* **Latency knee: between 2,000 and 4,000 rps offered** — p90 goes 2.32 → 61.12 ms (26×) while p50 barely moves. This is the operating limit.
+* Throughput knee: absorbs 8,000 rps error-free (8,001 achieved) — far past the latency knee, and misleading on its own.
+
+
+**llmd-hit — open-loop arrival-rate sweep**
+
+| offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
+|--:|--:|--:|--:|--:|--:|
+| 250 | 248 | 2.03 | 2.25 | 2.68 | 0 |
+| 500 | 498 | 2.00 | 2.19 | 2.58 | 0 |
+| 1,000 | 996 | 2.01 | 2.24 | 2.86 | 0 |
+| 2,000 | 1,995 | 2.05 | 2.32 | 3.04 | 0 |
+| 4,000 | 4,001 | 2.15 | 2.49 | 3.20 | 0 |
+| 8,000 | 8,006 | 2.28 | 2.75 | 3.47 | 0 |
+* Throughput knee: absorbs 8,000 rps error-free (8,006 achieved) — far past the latency knee, and misleading on its own.
+
+
+**vsr-miss — open-loop arrival-rate sweep**
+
+| offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
+|--:|--:|--:|--:|--:|--:|
+| 250 | 248 | 25.75 | 40.88 | 60.38 | 0 |
+| 500 | 470 | 475.64 | 573.45 | 596.73 | 2,174 |
+| 1,000 | 502 | 81.81 | 580.33 | 601.31 | 36,766 |
+| 2,000 | 459 | 0.34 | 572.55 | 598.28 | 115,141 |
+| 4,000 | 447 | 0.37 | 554.47 | 598.40 | 266,497 |
+| 8,000 | 437 | 0.43 | 0.71 | 601.84 | 567,807 |
+
+* **Latency knee: between 250 and 500 rps offered** — p90 goes 40.88 → 573.45 ms (14×) while p50 barely moves. This is the operating limit.
+* Throughput knee: absorbs 250 rps error-free (248 achieved) — far past the latency knee, and misleading on its own.
+
+
+**vsr-mix80 — open-loop arrival-rate sweep**
+
+| offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
+|--:|--:|--:|--:|--:|--:|
+| 250 | 250 | 0.28 | 0.37 | 0.47 | 0 |
+| 500 | 504 | 0.29 | 0.39 | 0.57 | 0 |
+| 1,000 | 1,002 | 0.31 | 0.42 | 0.54 | 0 |
+| 2,000 | 2,006 | 0.35 | 0.48 | 0.61 | 0 |
+| 4,000 | 3,886 | 0.42 | 60.97 | 99.93 | 11,810 |
+| 8,000 | 4,487 | 0.51 | 82.94 | 117.68 | 255,103 |
+
+* **Latency knee: between 2,000 and 4,000 rps offered** — p90 goes 0.48 → 60.97 ms (128×) while p50 barely moves. This is the operating limit.
+* Throughput knee: absorbs 2,000 rps error-free (2,006 achieved) — far past the latency knee, and misleading on its own.
+
+
+**vsr-hit — open-loop arrival-rate sweep**
+
+| offered rps | achieved rps | p50 ms | p90 ms | p99 ms | errors |
+|--:|--:|--:|--:|--:|--:|
+| 250 | 248 | 0.28 | 0.36 | 0.48 | 0 |
+| 500 | 498 | 0.30 | 0.39 | 0.49 | 0 |
+| 1,000 | 996 | 0.30 | 0.40 | 0.52 | 0 |
+| 2,000 | 1,995 | 0.34 | 0.46 | 0.64 | 0 |
+| 4,000 | 4,000 | 0.41 | 0.56 | 0.73 | 0 |
+| 8,000 | 8,007 | 0.49 | 0.72 | 0.96 | 0 |
+* Throughput knee: absorbs 8,000 rps error-free (8,007 achieved) — far past the latency knee, and misleading on its own.
 
 
 ## Praxis + llm-d-sc
-
-
-### Praxis + llm-d-sc — open-loop arrival rate
-
-| arm | n | req/s (median) | 95% CI | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | premises |
-|---|--:|--:|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| 250 rps offered | 3 | 291 | 291–291 | 1.82 | 2.01 | 2.20 | 2.74 | 3.77 | 5.40 | 1.86 | 0.22 | 0 | ok |
-| 500 rps offered | 3 | 541 | 541–541 | 1.79 | 1.98 | 2.17 | 2.65 | 3.49 | 5.90 | 1.83 | 0.22 | 0 | ok |
-| 1000 rps offered | 3 | 1,041 | 1,041–1,041 | 1.80 | 2.02 | 2.22 | 2.67 | 3.66 | 144.02 | 1.84 | 1.42 | 0 | ok |
-| 2000 rps offered | 3 | 2,041 | 2,031–2,041 | 1.92 | 194.21 | 229.57 | 312.14 | 392.53 | 434.96 | 36.79 | 81.01 | 0 | ok |
-| 4000 rps offered | 3 | 4,031 | 4,030–4,041 | 2.04 | 80.25 | 119.83 | 215.89 | 317.10 | 396.26 | 21.07 | 45.86 | 0 | ok |
-| 8000 rps offered | 3 | 8,030 | 8,030–8,030 | 2.15 | 81.25 | 140.55 | 206.41 | 311.97 | 417.64 | 18.66 | 46.70 | 0 | ok |
-| 16000 rps offered | 3 | 16,029 | 14,988–16,030 | 2.44 | 33.44 | 120.43 | 200.31 | 315.29 | 432.67 | 15.87 | 40.77 | 26,036 | **FAILED** |
-
-
-### Praxis + llm-d-sc — context size
-
-| arm | n | req/s (median) | 95% CI | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | premises |
-|---|--:|--:|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| 64 B | 3 | 349 | 348–399 | 190.35 | 311.79 | 331.32 | 358.37 | 392.16 | 414.77 | 183.71 | 99.87 | 0 | ok |
-| 256 B | 3 | 663 | 657–715 | 39.35 | 239.17 | 263.08 | 288.21 | 311.86 | 342.29 | 96.90 | 94.85 | 0 | ok |
-| 1024 B | 3 | 952 | 952–995 | 17.12 | 203.32 | 246.36 | 278.69 | 304.45 | 333.73 | 67.37 | 83.46 | 0 | ok |
-| 4096 B | 3 | 911 | 833–972 | 19.66 | 207.38 | 246.43 | 279.27 | 307.30 | 337.45 | 70.01 | 84.34 | 0 | ok |
-| 16384 B | 3 | 968 | 958–975 | 15.84 | 198.89 | 240.23 | 274.43 | 299.14 | 335.66 | 66.14 | 82.56 | 0 | ok |
-| 65536 B | 3 | 981 | 973–993 | 17.90 | 197.76 | 240.76 | 275.66 | 305.23 | 344.40 | 65.42 | 81.88 | 0 | ok |
 
 
 ### Praxis + llm-d-sc — cache: exact, by traffic shape
@@ -126,31 +188,6 @@ Generated from 261 captured runs across 85 distinct arms, each replicated. Every
 ## llm-d IPP + llm-d-sc
 
 
-### llm-d IPP + llm-d-sc — open-loop arrival rate
-
-| arm | n | req/s (median) | 95% CI | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | premises |
-|---|--:|--:|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| 250 rps offered | 3 | 291 | 291–291 | 2.11 | 19.80 | 76.15 | 146.09 | 155.41 | 195.47 | 11.38 | 29.69 | 0 | ok |
-| 500 rps offered | 3 | 541 | 541–541 | 2.07 | 3.16 | 38.25 | 150.56 | 167.44 | 215.00 | 8.08 | 24.99 | 0 | ok |
-| 1000 rps offered | 3 | 1,038 | 1,036–1,039 | 2.17 | 108.63 | 153.14 | 215.66 | 292.32 | 326.45 | 28.51 | 51.90 | 0 | ok |
-| 2000 rps offered | 3 | 2,041 | 2,031–2,041 | 2.13 | 188.37 | 225.78 | 291.58 | 354.30 | 410.05 | 36.97 | 78.99 | 0 | ok |
-| 4000 rps offered | 3 | 4,030 | 4,030–4,041 | 2.25 | 56.38 | 91.37 | 190.51 | 283.27 | 368.47 | 16.70 | 38.91 | 0 | ok |
-| 8000 rps offered | 3 | 8,030 | 8,030–8,030 | 2.39 | 78.93 | 138.25 | 201.82 | 280.44 | 373.87 | 18.63 | 45.56 | 0 | ok |
-| 16000 rps offered | 3 | 16,029 | 16,029–16,030 | 2.65 | 41.40 | 114.08 | 177.93 | 267.85 | 371.82 | 14.95 | 38.49 | 0 | ok |
-
-
-### llm-d IPP + llm-d-sc — context size
-
-| arm | n | req/s (median) | 95% CI | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | premises |
-|---|--:|--:|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| 64 B | 3 | 386 | 383–391 | 173.06 | 268.74 | 284.23 | 308.63 | 335.77 | 374.25 | 166.27 | 85.00 | 0 | ok |
-| 256 B | 3 | 687 | 684–708 | 27.19 | 242.44 | 268.08 | 297.43 | 323.70 | 355.51 | 93.44 | 96.52 | 0 | ok |
-| 1024 B | 3 | 974 | 970–982 | 17.03 | 202.54 | 248.56 | 282.95 | 313.12 | 365.18 | 65.87 | 83.89 | 0 | ok |
-| 4096 B | 3 | 542 | 482–589 | 138.19 | 247.71 | 265.79 | 291.04 | 317.67 | 333.98 | 117.71 | 94.67 | 0 | ok |
-| 16384 B | 3 | 753 | 742–791 | 22.33 | 229.85 | 258.95 | 291.30 | 313.84 | 345.61 | 85.00 | 92.13 | 0 | ok |
-| 65536 B | 3 | 979 | 970–986 | 17.20 | 201.43 | 246.44 | 283.05 | 314.55 | 341.83 | 65.57 | 83.08 | 0 | ok |
-
-
 ### llm-d IPP + llm-d-sc — cache: exact, by traffic shape
 
 | arm | n | req/s (median) | 95% CI | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | premises |
@@ -184,31 +221,6 @@ Generated from 261 captured runs across 85 distinct arms, each replicated. Every
 
 
 ## vLLM SR adapter + llm-d-sc
-
-
-### vLLM SR adapter + llm-d-sc — open-loop arrival rate
-
-| arm | n | req/s (median) | 95% CI | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | premises |
-|---|--:|--:|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| 250 rps offered | 3 | 291 | 291–291 | 0.25 | 0.35 | 13.55 | 116.36 | 120.70 | 132.94 | 4.47 | 20.34 | 0 | ok |
-| 500 rps offered | 3 | 541 | 541–541 | 0.26 | 0.36 | 0.44 | 115.09 | 124.59 | 187.98 | 2.55 | 15.07 | 0 | ok |
-| 1000 rps offered | 3 | 1,041 | 1,040–1,041 | 0.26 | 0.34 | 0.39 | 116.65 | 124.04 | 177.37 | 2.45 | 15.13 | 0 | ok |
-| 2000 rps offered | 3 | 1,901 | 1,870–1,952 | 0.32 | 153.67 | 183.59 | 251.70 | 306.69 | 370.97 | 33.67 | 68.15 | 9,806 | **FAILED** |
-| 4000 rps offered | 3 | 3,024 | 2,760–3,204 | 0.42 | 136.00 | 165.10 | 227.26 | 290.70 | 388.60 | 32.22 | 59.77 | 77,869 | **FAILED** |
-| 8000 rps offered | 3 | 4,919 | 4,383–4,927 | 0.50 | 85.09 | 124.42 | 176.68 | 263.18 | 332.22 | 20.69 | 42.58 | 246,571 | **FAILED** |
-| 16000 rps offered | 3 | 4,415 | 3,121–6,993 | 0.63 | 54.68 | 112.65 | 175.67 | 267.60 | 360.67 | 15.57 | 38.02 | 839,063 | **FAILED** |
-
-
-### vLLM SR adapter + llm-d-sc — context size
-
-| arm | n | req/s (median) | 95% CI | p50 ms | p90 ms | p95 ms | p99 ms | p99.9 ms | max ms | mean ms | stddev ms | errors | premises |
-|---|--:|--:|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| 64 B | 3 | 387 | 380–394 | 172.51 | 269.78 | 284.86 | 307.24 | 328.66 | 361.12 | 165.69 | 85.16 | 0 | ok |
-| 256 B | 3 | 697 | 694–708 | 25.23 | 241.67 | 267.47 | 296.91 | 320.47 | 367.12 | 92.18 | 97.38 | 0 | ok |
-| 1024 B | 3 | 974 | 968–979 | 18.77 | 203.08 | 250.23 | 287.88 | 315.72 | 357.74 | 65.91 | 83.91 | 0 | ok |
-| 4096 B | 3 | 449 | 400–521 | 155.47 | 257.02 | 272.89 | 297.26 | 326.49 | 365.49 | 142.01 | 90.10 | 0 | ok |
-| 16384 B | 3 | 697 | 690–706 | 25.44 | 241.36 | 267.27 | 298.77 | 324.08 | 354.75 | 92.17 | 97.35 | 0 | ok |
-| 65536 B | 3 | 974 | 960–981 | 18.43 | 203.63 | 250.15 | 289.55 | 319.31 | 348.00 | 65.87 | 84.25 | 0 | ok |
 
 
 ### vLLM SR adapter + llm-d-sc — cache: exact, by traffic shape

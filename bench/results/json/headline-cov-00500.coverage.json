@@ -1,0 +1,13 @@
+{
+  "label": "headline-cov-00500",
+  "offered_rate_rps": 500,
+  "gateway_requests": 12700,
+  "classifier_served_delta": 11865,
+  "classifier_misses_delta": 11352,
+  "classification_coverage_pct": 93.43,
+  "coverage_measurement_valid": true,
+  "p50_ms": 564.333013,
+  "p90_ms": 586.117805,
+  "p99_ms": 603.225213,
+  "errors": 0
+}

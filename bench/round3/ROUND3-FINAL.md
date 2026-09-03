@@ -18,10 +18,10 @@ comparing gateway request counts against llm-d-sc's own served counter:
 
 | Offered rate | Requests reaching the classifier | p50 |
 |--:|--:|--:|
-| 500 rps | **60.2 %** | 511.27 ms |
-| 4,000 rps | **17.8 %** | **2.00 ms** |
+| 500 rps | **93.4 %** | 564.33 ms |
+| 4,000 rps | **11.4 %** | **2.00 ms** |
 
-At 4,000 rps, **82 % of requests are never semantically routed.** Meanwhile every
+At 4,000 rps, **89 % of requests are never semantically routed.** Meanwhile every
 signal an operator watches says the system is healthy and *improving*:
 
 * throughput tracks the offered rate exactly — no saturation;
@@ -37,6 +37,14 @@ classifier dead, now quantified under ordinary load.
 **Operating consequence:** the classifier's capacity, not the gateway's, sets the
 rate at which semantic routing actually happens. On this hardware that is roughly
 **450–500 novel classifications/sec per replica** (16 workers, RAYON=1).
+
+> **Coverage evidence is archived.** Each coverage arm writes a sidecar
+> `<label>.coverage.json` carrying `gateway_requests`,
+> `classifier_served_delta`, `classification_coverage_pct` and a
+> `coverage_measurement_valid` gate. An earlier revision quoted 60.2 % / 17.8 %
+> from a log-tail read that raced llm-d-sc's periodic metrics line — the same
+> method that produced impossible 137 % and 150 % readings. Those figures are
+> withdrawn and replaced by the bounded measurements above.
 
 ## Headline 2 — the knee is set by the miss fraction, not the gateway
 

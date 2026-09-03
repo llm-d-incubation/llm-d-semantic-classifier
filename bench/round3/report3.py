@@ -15,16 +15,42 @@ Differences from rounds 1-2, all of them consequences of the methodology review:
 import argparse, glob, json, os, statistics
 from collections import defaultdict
 
+# Arms this campaign has retired. Reporting them beside corrected data is how a
+# reader ends up quoting a withdrawn number: an earlier revision of this report
+# carried the buggy open-loop rates (250 offered -> 291 achieved) and the
+# withdrawn 1k->2k knee, while the overview next to it carried the correction.
+SUPERSEDED = {
+    "r3-*-rate*": "open-loop warmup carry-in inflated every rate by concurrency/window "
+                  "(1024/25 = 40.96 rps); superseded by the corrected r3b sweep",
+    "r3-*-ctx*":  "--context-bytes was ignored in corpus mode, so all six arms sent "
+                  "identical traffic; the sweep measured nothing",
+}
+
+def _retired(label):
+    if label.startswith("r3-") and "-rate" in label:
+        return "r3-*-rate*"
+    if label.startswith("r3-") and "-ctx" in label:
+        return "r3-*-ctx*"
+    return None
+
 def load(src):
-    out = []
+    out, dropped = [], {}
     for p in sorted(glob.glob(os.path.join(src, "json", "*.json"))):
+        if p.endswith(".coverage.json"):
+            continue
         try:
             d = json.load(open(p))
-            if d["label"].startswith("r3-"):
-                out.append(d)
         except Exception:
-            pass
-    return out
+            continue
+        lbl = d.get("label", "")
+        if not (lbl.startswith("r3-") or lbl.startswith("r3b-")):
+            continue
+        r = _retired(lbl)
+        if r:
+            dropped[r] = dropped.get(r, 0) + 1
+            continue
+        out.append(d)
+    return out, dropped
 
 def group(rows):
     """Collapse `<arm>-repN` into one entry with a median and a bootstrap CI."""
@@ -68,12 +94,12 @@ def table(g, prefix, title, keyfn, note=""):
                  f"{errs:,} | {'ok' if okp else '**FAILED**'} |")
     return "\n".join(o) + "\n"
 
-def knees(g, stack):
+def knees(g, stack, prefix="r3-"):
     """Latency knee vs throughput knee. Reporting only the second is how a
     saturated service gets described as healthy."""
     rows = []
     for k in sorted(g):
-        if not k.startswith(f"r3-{stack}-rate"): continue
+        if not k.startswith(f"{prefix}{stack}-rate"): continue
         rate = int(k.split("rate")[1])
         reps = g[k]
         rows.append((rate,
@@ -111,8 +137,8 @@ def main():
     ap.add_argument("--src", default="../results")
     ap.add_argument("--out", default="ROUND3-STATISTICAL-REPORT.md")
     a = ap.parse_args()
-    rows = load(a.src); g = group(rows)
-    d = ["# Round 3 — statistical report", "",
+    rows, dropped = load(a.src); g = group(rows)
+    d = ["# Round 3 — statistical report (corrected data only)", "",
          f"Generated from {len(rows)} captured runs across {len(g)} distinct arms, "
          "each replicated. Every figure is a median over independent repetitions with a "
          "bootstrap 95% CI. `p99.9` reads `n/a` where an arm has fewer than 1,000 "
@@ -121,9 +147,20 @@ def main():
          "2 B–18 KB. **Config:** llm-d-sc at 16 workers / `RAYON_NUM_THREADS=1` / 16 CPU — "
          "Rayon pinned rather than left to track the CPU limit. **Arrival-rate arms are "
          "OPEN-LOOP** (Poisson), so offered rate is independent of response latency.", ""]
-    d.append("## Knees\n")
-    for s in ["praxis", "llmd", "vsr"]:
-        d.append(knees(g, s))
+    if dropped:
+        d += ["## Excluded arms", "",
+              "These were measured but are retired. They are excluded here so a corrected "
+              "report cannot be read alongside a withdrawn number; the raw files remain in "
+              "`data/json/` for anyone checking the correction.", "",
+              "| arm family | runs excluded | why |", "|---|--:|---|"]
+        for k, why in SUPERSEDED.items():
+            if k in dropped:
+                d.append(f"| `{k}` | {dropped[k]} | {why} |")
+        d.append("")
+    d.append("## Knees (corrected sweep, r3b)\n")
+    for st in ["praxis", "llmd", "vsr"]:
+        for regime in ["miss", "mix80", "hit"]:
+            d.append(knees(g, f"{st}-{regime}", prefix="r3b-"))
     for s, name in [("praxis","Praxis + llm-d-sc"), ("llmd","llm-d IPP + llm-d-sc"),
                     ("vsr","vLLM SR adapter + llm-d-sc")]:
         d.append(f"\n## {name}\n")

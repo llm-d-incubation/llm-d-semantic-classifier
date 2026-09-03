@@ -8,8 +8,8 @@ to the instrument, not by a caveat in the prose.
 |---|---|
 | `RAYON_NUM_THREADS` never controlled; vertical sweep moved 3 variables at once | `rayon_matrix.py` — Rayon × workers with CPU pinned, replicated |
 | Closed-loop only; cannot observe queue explosion | `scbench --rate/--arrival` — true open-loop, constant or Poisson |
-| One run per cell; 2 M requests ≠ 10 experiments | 5 repetitions/cell, randomised order, bootstrap 95% CI |
-| Synthetic filler prompts, no semantic variance | `corpus.jsonl` — 20,000 frozen unique utterances, 12 domains |
+| One run per cell; 2 M requests ≠ 10 experiments | 3 repetitions/cell (5 in the Rayon matrix), randomised order, bootstrap 95% CI |
+| Synthetic filler prompts, no semantic variance | `corpus.jsonl` — 200,000 frozen unique utterances, 12 domains |
 | Premise checks written to an unarchived tmp file | `premises_passed` / `premise_notes` in every result JSON |
 
 ## The corpus
@@ -61,3 +61,22 @@ Each of these exists because it was violated and produced a wrong number.
    sweeps ran and produced smooth, publishable, meaningless curves.
 5. **Percentiles need samples.** p99.9 from fewer than 1,000 requests is noise;
    the audit flags it rather than letting it into a table.
+
+## Repetition counts by campaign
+
+Stated explicitly because they differ, and an earlier revision of this file
+claimed a single figure for all of them.
+
+| Campaign | Reps/cell | Why |
+|---|--:|---|
+| Rayon matrix (`rayon_matrix.py`) | 5 | high run-to-run variance on the miss path |
+| Round-3 campaigns (`campaign3.py`) | 3 | 85 arms; 3 reps kept the cluster window affordable |
+| Corrected knee sweep (`knee_rerun.py`) | 3 | 54 cells across 3 stacks × 3 regimes × 6 rates |
+| Coverage sweeps (`coverage.py`) | 1 | counter deltas, not distributions; repeated across rates instead |
+
+## Corpus size
+
+200,000 unique utterances, seed `20260903`. `gen_corpus.py` defaults to 200,000
+so the default matches what was run — an earlier default of 20,000 disagreed with
+every document, and since the corpus is regenerated rather than archived, the
+default *is* the contract.

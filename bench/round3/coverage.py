@@ -79,6 +79,12 @@ def run_with_coverage(label, rate, dist="unique", extra=None, dur=25, conc=1024,
               coverage_measurement_valid=valid,
               p50_ms=d["latency"]["p50_ms"], p90_ms=d["latency"]["p90_ms"],
               p99_ms=d["latency"]["p99_ms"], errors=d["errors"])
-    H.sh(H.KCTL+["exec","bench-shell","--","sh","-c",
-                 f"cat > {H.RESULTS}/json/{label}.coverage.json <<'EOF'\n{json.dumps(ev,indent=2)}\nEOF"])
+    # Write the sidecar LOCALLY. Piping a heredoc through `kubectl exec` failed
+    # silently and produced zero files, which is exactly the sort of unverified
+    # step this campaign keeps getting caught by -- so it is written where it can
+    # be checked immediately.
+    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "results", "json")
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, f"{label}.coverage.json"), "w") as f:
+        json.dump(ev, f, indent=2)
     return ev
