@@ -88,6 +88,17 @@ struct Args {
     /// semantic variance rather than one filler sentence at a target length.
     #[arg(long, default_value = "")]
     corpus: String,
+    /// Prefix every prompt with a per-run token so its cache key is guaranteed
+    /// novel. Required for any honest cache-MISS arm: llm-d-sc's L1 holds 50,000
+    /// entries and persists across runs, so a corpus walk re-enters prompts that
+    /// earlier runs already cached. Measured directly, an unsalted "miss" arm ran
+    /// at a 4.4% miss rate -- i.e. it was a cache-HIT measurement wearing a miss
+    /// label, and reported ~495 rps against a true miss capacity near 266.
+    ///
+    /// The prefix is a dozen characters on a ~450-byte prompt, so it changes the
+    /// blake3 cache key completely while leaving the text semantically intact.
+    #[arg(long, default_value = "")]
+    novel_salt: String,
     /// Start index into the corpus. Distinct offsets give repetitions DISJOINT
     /// prompt sets, which is required for a novel-prompt arm: repetitions share a
     /// process and therefore a warm L1 cache, so overlapping slices turn every
@@ -486,10 +497,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     warm_done.fetch_add(1, Ordering::Relaxed) as u64
                 };
                 let (ctx, prompt) = if !corpus.is_empty() {
-                    // Corpus mode: the utterance IS the prompt. Cache behaviour
-                    // then comes from the sampling distribution rather than from
-                    // a synthetic key, which is the realistic arrangement.
-                    let ci = corpus_index(&args.dist, idx, corpus.len() as u64, args.corpus_offset) as usize;
+                    // Corpus mode. The utterance is the prompt, but cache_mode
+                    // still governs WHICH utterance, so a hit/miss regime can be
+                    // pinned by construction:
+                    //
+                    //   miss   walk the corpus -- every prompt novel
+                    //   hit    cycle a fixed `keyspace` slice -- guaranteed repeats
+                    //   mixed  hit_ratio drawn from that slice, the rest novel
+                    //
+                    // Without this, cache_mode was silently ignored whenever a
+                    // corpus was supplied, so a "100% hit" arm was really uniform
+                    // sampling -- mostly misses -- and the hit and miss regimes
+                    // produced the same curve.
+                    let n = corpus.len() as u64;
+                    let ci = match args.cache_mode.as_str() {
+                        "hit" => (args.corpus_offset + (idx % args.keyspace.max(1))) % n,
+                        "mixed" => {
+                            let mut z = idx.wrapping_mul(0x9E3779B97F4A7C15);
+                            z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+                            z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+                            let u = ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64;
+                            if u < args.hit_ratio {
+                                (args.corpus_offset + (idx % args.keyspace.max(1))) % n
+                            } else {
+                                // Novel region, deliberately disjoint from the
+                                // warm slice so a "miss" cannot be a silent hit.
+                                (args.corpus_offset + args.keyspace + idx) % n
+                            }
+                        }
+                        _ => corpus_index(&args.dist, idx, n, args.corpus_offset),
+                    } as usize;
                     let mut text = corpus[ci].clone();
                     if args.context_bytes > 0 {
                         // Pad with FURTHER corpus utterances rather than filler:
@@ -507,6 +544,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             while cut > 0 && !text.is_char_boundary(cut) { cut -= 1; }
                             text.truncate(cut);
                         }
+                    }
+                    if !args.novel_salt.is_empty() {
+                        text = format!("{} {} {}", args.novel_salt, idx, text);
                     }
                     (format!("corpus-{ci}"), text)
                 } else {

@@ -31,9 +31,12 @@ TARGETS = {"praxis": "http://praxis.cnuland-dev.svc.cluster.local:8080",
 MODEL = {"praxis": "tier-small", "llmd": "tier-small", "vsr": "router-model"}
 REGIMES = {
     # dist,       keyspace, hit_ratio, cache_mode
-    "miss":  dict(dist="unique",  extra=[]),
+    "miss":  dict(dist="unique",  extra=["--novel-salt","MISS"]),
     "hit":   dict(dist="uniform", extra=["--cache-mode","hit","--keyspace","1"]),
     "mix80": dict(dist="uniform", extra=["--cache-mode","mixed","--hit-ratio","0.8","--keyspace","2000"]),
+    # NOTE: mix80's novel fraction is drawn from a corpus region disjoint from its
+    # warm slice, but that region can still have been cached by an earlier run, so
+    # its effective hit ratio is >= 0.8 rather than exactly 0.8. Reported as such.
 }
 
 def ci95(xs, n=1500):
@@ -42,7 +45,9 @@ def ci95(xs, n=1500):
     return m[int(.025*n)], m[int(.975*n)]
 
 def run(stack, regime, rate, rep):
-    r = REGIMES[regime]
+    r = dict(REGIMES[regime])
+    r["extra"] = [f"{stack}-{regime}-{rate}-{rep}-{int(time.time())}" if e == "MISS" else e
+                  for e in r["extra"]]
     lbl = f"r3b-{stack}-{regime}-rate{rate:05d}-rep{rep}"
     a = H.KCTL+["exec","bench-driver","--","/work/bin/scbench",
         "--mode", "classify" if stack=="vsr" else "http",
