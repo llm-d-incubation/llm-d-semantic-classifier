@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "label": "r3b-vsr-miss-rate08000-rep0",
+  "mode": "classify",
+  "targets": [
+    "http://llm-d-sc-vsr-adapter.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 27349,
+  "warmup_requests": 3000,
+  "measured_requests": 200161,
+  "wall_secs": 25.001119339,
+  "throughput_rps": 437.780399013038,
+  "throughput_rpm": 26266.82394078228,
+  "offered_concurrency": 1024,
+  "load_mode": "open-loop-poisson",
+  "offered_rate_rps": 8000.0,
+  "scheduled_requests": 200160,
+  "sent_requests": 200161,
+  "actual_offer_rps": 8006.041541018701,
+  "offer_attainment": 1.0007551926273375,
+  "completed_rps": 437.780399013038,
+  "rejected_rps": 7568.301140214801,
+  "rate_attainment": 0.05472254987662975,
+  "corpus": "/work/corpus.jsonl",
+  "corpus_count": 200000,
+  "corpus_sha256": "fnv1a64:21771234814b5f1e",
+  "dist": "unique",
+  "premises_passed": false,
+  "premise_notes": [
+    "rate attainment 0.055 with 94.5% errors ({\"COMPLEX\": 107, \"HTTP_502\": 189216, \"MEDIUM\": 6060, \"REASONING\": 1048, \"SIMPLE\": 3730}): the target REJECTED the load -- diagnose the errors, not the generator",
+    "dist=unique issued 200161 requests against a 200000-utterance corpus: it wrapped 1.0x, so most requests were REPEATS and this arm measures the cache-hit path, not novel prompts"
+  ],
+  "implied_mean_ms": 2339.0722890028323,
+  "errors": 189216,
+  "error_rate_pct": 94.53190181903568,
+  "status_counts": {
+    "COMPLEX": 107,
+    "HTTP_502": 189216,
+    "MEDIUM": 6060,
+    "REASONING": 1048,
+    "SIMPLE": 3730
+  },
+  "latency": {
+    "count": 200161,
+    "min_ms": 0.166423,
+    "mean_ms": 32.38769499245607,
+    "stddev_ms": 132.89689006243066,
+    "p50_ms": 0.427393,
+    "p90_ms": 0.701444,
+    "p95_ms": 563.809282,
+    "p99_ms": 599.261111,
+    "p999_ms": 620.222698,
+    "max_ms": 647.38864
+  },
+  "started_unix": 1788411929
+}

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "label": "r3b-vsr-mix80-rate04000-rep0",
+  "mode": "classify",
+  "targets": [
+    "http://llm-d-sc-vsr-adapter.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "mixed",
+  "hit_ratio": 0.8,
+  "keyspace": 2000,
+  "run_id": 3276,
+  "warmup_requests": 80000,
+  "measured_requests": 100082,
+  "wall_secs": 25.000962407,
+  "throughput_rps": 3889.8502552354166,
+  "throughput_rpm": 233391.015314125,
+  "offered_concurrency": 1024,
+  "load_mode": "open-loop-poisson",
+  "offered_rate_rps": 4000.0,
+  "scheduled_requests": 100081,
+  "sent_requests": 100082,
+  "actual_offer_rps": 4003.0858960844803,
+  "offer_attainment": 1.00077147402112,
+  "completed_rps": 3889.8502552354166,
+  "rejected_rps": 113.27563930927198,
+  "rate_attainment": 0.9724625638088542,
+  "corpus": "/work/corpus.jsonl",
+  "corpus_count": 200000,
+  "corpus_sha256": "fnv1a64:21771234814b5f1e",
+  "dist": "uniform",
+  "premises_passed": false,
+  "premise_notes": [
+    "rate attainment 0.972 < 0.98 at 3% errors: the generator could not sustain 4000 rps, so this arm measures the DRIVER, not the target"
+  ],
+  "implied_mean_ms": 263.2492082752493,
+  "errors": 2832,
+  "error_rate_pct": 2.829679662676605,
+  "status_counts": {
+    "COMPLEX": 9049,
+    "HTTP_502": 2832,
+    "MEDIUM": 56018,
+    "REASONING": 12958,
+    "SIMPLE": 19225
+  },
+  "latency": {
+    "count": 100082,
+    "min_ms": 0.179867,
+    "mean_ms": 9.857295144931156,
+    "stddev_ms": 24.64529275217003,
+    "p50_ms": 0.406649,
+    "p90_ms": 59.605973,
+    "p95_ms": 73.893851,
+    "p99_ms": 96.232292,
+    "p999_ms": 120.715368,
+    "max_ms": 151.744226
+  },
+  "started_unix": 1788414725
+}

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "label": "r3b-vsr-miss-rate04000-rep2",
+  "mode": "classify",
+  "targets": [
+    "http://llm-d-sc-vsr-adapter.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 98720,
+  "warmup_requests": 3000,
+  "measured_requests": 100021,
+  "wall_secs": 25.001623177,
+  "throughput_rps": 444.45114308507686,
+  "throughput_rpm": 26667.06858510461,
+  "offered_concurrency": 1024,
+  "load_mode": "open-loop-poisson",
+  "offered_rate_rps": 4000.0,
+  "scheduled_requests": 100020,
+  "sent_requests": 100021,
+  "actual_offer_rps": 4000.5402566027165,
+  "offer_attainment": 1.0001350641506792,
+  "completed_rps": 444.45114308507686,
+  "rejected_rps": 3556.129110920725,
+  "rate_attainment": 0.11111278577126922,
+  "corpus": "/work/corpus.jsonl",
+  "corpus_count": 200000,
+  "corpus_sha256": "fnv1a64:21771234814b5f1e",
+  "dist": "unique",
+  "premises_passed": false,
+  "premise_notes": [
+    "rate attainment 0.111 with 88.9% errors ({\"COMPLEX\": 251, \"HTTP_502\": 88909, \"MEDIUM\": 6015, \"REASONING\": 1065, \"SIMPLE\": 3781}): the target REJECTED the load -- diagnose the errors, not the generator"
+  ],
+  "implied_mean_ms": 2303.9652747703385,
+  "errors": 88909,
+  "error_rate_pct": 88.89033303006369,
+  "status_counts": {
+    "COMPLEX": 251,
+    "HTTP_502": 88909,
+    "MEDIUM": 6015,
+    "REASONING": 1065,
+    "SIMPLE": 3781
+  },
+  "latency": {
+    "count": 100021,
+    "min_ms": 0.161884,
+    "mean_ms": 64.3203231232941,
+    "stddev_ms": 181.1016044057984,
+    "p50_ms": 0.36723,
+    "p90_ms": 558.41318,
+    "p95_ms": 581.247224,
+    "p99_ms": 600.264709,
+    "p999_ms": 618.797743,
+    "max_ms": 655.915832
+  },
+  "started_unix": 1788411901
+}

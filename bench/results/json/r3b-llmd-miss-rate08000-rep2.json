@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "label": "r3b-llmd-miss-rate08000-rep2",
+  "mode": "http",
+  "targets": [
+    "http://ipp-envoy.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 65241,
+  "warmup_requests": 3000,
+  "measured_requests": 200164,
+  "wall_secs": 25.00069671,
+  "throughput_rps": 8006.3368762014,
+  "throughput_rpm": 480380.212572084,
+  "offered_concurrency": 1024,
+  "load_mode": "open-loop-poisson",
+  "offered_rate_rps": 8000.0,
+  "scheduled_requests": 200163,
+  "sent_requests": 200164,
+  "actual_offer_rps": 8006.296877316105,
+  "offer_attainment": 1.0007871096645131,
+  "completed_rps": 8006.3368762014,
+  "rejected_rps": 0.0,
+  "rate_attainment": 1.000792109525175,
+  "corpus": "/work/corpus.jsonl",
+  "corpus_count": 200000,
+  "corpus_sha256": "fnv1a64:21771234814b5f1e",
+  "dist": "unique",
+  "premises_passed": false,
+  "premise_notes": [
+    "dist=unique issued 200164 requests against a 200000-utterance corpus: it wrapped 1.0x, so most requests were REPEATS and this arm measures the cache-hit path, not novel prompts"
+  ],
+  "implied_mean_ms": 127.89869022921205,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 200164
+  },
+  "latency": {
+    "count": 200164,
+    "min_ms": 0.763765,
+    "mean_ms": 34.159738951569715,
+    "stddev_ms": 134.0358378219968,
+    "p50_ms": 2.235607,
+    "p90_ms": 2.870163,
+    "p95_ms": 574.284182,
+    "p99_ms": 610.372852,
+    "p999_ms": 636.004541,
+    "max_ms": 674.592805
+  },
+  "started_unix": 1788408467
+}

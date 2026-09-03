@@ -1,5 +1,5 @@
 # Round 3 — statistical report
-Generated from 261 captured runs across 85 distinct arms, each replicated. Every figure is a median over independent repetitions with a bootstrap 95% CI.
+Generated from 261 captured runs across 85 distinct arms, each replicated. Every figure is a median over independent repetitions with a bootstrap 95% CI. `p99.9` reads `n/a` where an arm has fewer than 1,000 measured requests, because it cannot be resolved from that sample.
 **Traffic:** frozen 200,000-utterance corpus (seed `20260903`), 12 domains, 2 B–18 KB. **Config:** llm-d-sc at 16 workers / `RAYON_NUM_THREADS=1` / 16 CPU — Rayon pinned rather than left to track the CPU limit. **Arrival-rate arms are OPEN-LOOP** (Poisson), so offered rate is independent of response latency.
 ## Knees
 

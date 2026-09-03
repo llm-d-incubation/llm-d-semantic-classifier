@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "label": "r3b-vsr-miss-rate08000-rep2",
+  "mode": "classify",
+  "targets": [
+    "http://llm-d-sc-vsr-adapter.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 83805,
+  "warmup_requests": 3000,
+  "measured_requests": 200161,
+  "wall_secs": 25.001302114,
+  "throughput_rps": 432.85745480992347,
+  "throughput_rpm": 25971.44728859541,
+  "offered_concurrency": 1024,
+  "load_mode": "open-loop-poisson",
+  "offered_rate_rps": 8000.0,
+  "scheduled_requests": 200160,
+  "sent_requests": 200161,
+  "actual_offer_rps": 8005.983011897458,
+  "offer_attainment": 1.0007478764871822,
+  "completed_rps": 432.85745480992347,
+  "rejected_rps": 7573.16555500426,
+  "rate_attainment": 0.054107181851240436,
+  "corpus": "/work/corpus.jsonl",
+  "corpus_count": 200000,
+  "corpus_sha256": "fnv1a64:21771234814b5f1e",
+  "dist": "unique",
+  "premises_passed": false,
+  "premise_notes": [
+    "rate attainment 0.054 with 94.6% errors ({\"COMPLEX\": 98, \"HTTP_502\": 189339, \"MEDIUM\": 5898, \"REASONING\": 1033, \"SIMPLE\": 3793}): the target REJECTED the load -- diagnose the errors, not the generator",
+    "dist=unique issued 200161 requests against a 200000-utterance corpus: it wrapped 1.0x, so most requests were REPEATS and this arm measures the cache-hit path, not novel prompts"
+  ],
+  "implied_mean_ms": 2365.6748627551283,
+  "errors": 189339,
+  "error_rate_pct": 94.59335235135717,
+  "status_counts": {
+    "COMPLEX": 98,
+    "HTTP_502": 189339,
+    "MEDIUM": 5898,
+    "REASONING": 1033,
+    "SIMPLE": 3793
+  },
+  "latency": {
+    "count": 200161,
+    "min_ms": 0.161863,
+    "mean_ms": 32.369291793606145,
+    "stddev_ms": 133.5731055656909,
+    "p50_ms": 0.439299,
+    "p90_ms": 0.715532,
+    "p95_ms": 566.48663,
+    "p99_ms": 605.804502,
+    "p999_ms": 627.580015,
+    "max_ms": 678.955241
+  },
+  "started_unix": 1788411986
+}
