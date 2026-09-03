@@ -10,7 +10,7 @@ numbers substantially.
 
 | Defect (round 1–2) | Fix | Effect on conclusions |
 |---|---|---|
-| `RAYON_NUM_THREADS` uncontrolled; vertical sweep moved 3 variables at once | pinned and swept with CPU held | **`RT=1` is 6.65× the default**; "16 workers is ideal" withdrawn |
+| `RAYON_NUM_THREADS` uncontrolled; vertical sweep moved 3 variables at once | pinned and swept with CPU held | direction confirmed (**RT=1 ≈ 2.4× RT=4**, replicated); "16 workers is ideal" withdrawn |
 | Closed-loop only — cannot observe queue explosion | true open-loop, constant + Poisson | revealed a **latency knee 8× below** the throughput knee |
 | One run per cell | 3 reps, randomised, bootstrap 95% CI | CIs span up to 3.5×; single runs were never safe |
 | Synthetic filler prompts | frozen 200k-utterance corpus, 12 domains | **classification cost went from ~16% to 45–96%** |
@@ -18,7 +18,7 @@ numbers substantially.
 
 ---
 
-## Headline 1 — the classifier is the bottleneck, not any gateway
+## Headline 1 — classifier inference dominates cost, but the gateway still shapes the tail
 
 At identical realistic traffic, all three stacks converge:
 
@@ -32,12 +32,16 @@ At identical realistic traffic, all three stacks converge:
 llm-d and vLLM SR are within ~1% of each other at every shape — **even though the
 vLLM SR adapter only classifies and never proxies the inference request**. When a
 path that skips proxying performs identically to one that doesn't, the shared
-component is the limit. That component is llm-d-sc's forward.
+component is dominating. That component is llm-d-sc's forward.
 
-Praxis runs 10–30% above the other two, which is a real proxy-efficiency
-difference, but all three are bounded by the same classifier.
+**But "the classifier is the bottleneck, not any gateway" would be too strong.**
+Praxis runs 10–30% above the other two on throughput, and its *tail* behaviour is
+materially different — it holds p90 roughly 2× longer under rising load. The
+defensible claim is: **classifier inference is the dominant cost on novel and
+mixed traffic, while gateway implementation still materially affects tail
+behaviour.**
 
-## Headline 2 — classification is expensive on real traffic
+## Headline 2 — inline classification is a routing-plane capacity cost
 
 Rounds 1–2 measured ~16%. That figure came from `--cache-mode hit --keyspace 1`:
 one warm key, 100% cache hits, so classification was nearly free by construction.
@@ -49,10 +53,17 @@ With realistic traffic containing genuine misses:
 | 128 | **−86.8%** | −95.8% |
 | 512 | −45.3% | −43.2% |
 
-Both gateways pay **43–96%**. This is a property of putting a CPU classifier in
-the request path, not of either proxy — which is a far more useful conclusion than
-any stack-vs-stack ranking, and it was invisible until the traffic became
-realistic.
+Both gateways pay **43–96%**. Stated precisely:
+
+> **Inline CPU classification reduces maximum gateway-path throughput by 43–96%
+> versus the same gateway without classification, under this simulated-backend
+> workload.**
+
+That mouthful matters. These backends return in milliseconds; a real generated
+response takes seconds. A 10–100 ms classifier against 5–20 s of generation is a
+small fraction of end-to-end latency. **This is a routing-plane capacity cost, not
+an end-to-end inference cost** — important when a gateway must carry thousands of
+agents, but not a claim that users see a 90% penalty.
 
 ## Headline 3 — two knees, and only one of them matters
 
@@ -236,5 +247,8 @@ Throughput knee: absorbs 1,000 rps error-free — well past the latency knee, an
   softmax transform, remain unmeasured.
 * **Network impairment, pod loss and rolling updates** under sustained open-loop
   load were not run.
-* The Rayon × worker matrix completed only partially before the cluster window
-  closed; `RT=1` is well evidenced at W16 but the full surface is not mapped.
+* **The Rayon result is directional, not a mapped optimum.** An earlier *isolated,
+  single-run* diagnostic observed **6.65×** versus the unset default; the
+  replicated round-3 comparison confirms the direction (W16/RT1 ≈ 248 req/s vs
+  W16/RT4 ≈ 103 req/s, 3 reps each) but the full W × RT surface did not complete
+  before the cluster window closed. Quote the direction, not the 6.65×.

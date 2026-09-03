@@ -145,7 +145,10 @@ def make(n_target=20000):
     return rows
 
 if __name__ == "__main__":
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 20000
+    # Default matches what the campaign actually ran. An earlier default of
+    # 20000 disagreed with the docs, which said 200000, and the corpus is not
+    # archived -- so the default IS the contract.
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else 200000
     rows = make(n)
     with open(OUT, "w") as f:
         for r in rows:

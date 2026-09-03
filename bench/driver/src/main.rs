@@ -302,10 +302,21 @@ struct Report {
     load_mode: String,
     /// Open-loop only: requested arrival rate.
     offered_rate_rps: f64,
-    /// Open-loop only: achieved / offered. Below ~0.98 the generator could not
-    /// keep up, so the arm measured the DRIVER and must not be published.
+    /// Open-loop, kept SEPARATE because they answer different questions:
+    ///   offer_attainment  did the GENERATOR meet the target? (scheduler health)
+    ///   completion_rate   did the TARGET keep up? (saturation)
+    /// Conflating them makes "my driver was too slow" indistinguishable from
+    /// "the service saturated", which are opposite conclusions.
+    scheduled_requests: u64,
+    sent_requests: u64,
+    actual_offer_rps: f64,
+    offer_attainment: f64,
+    completed_rps: f64,
+    rejected_rps: f64,
     rate_attainment: f64,
     corpus: String,
+    corpus_count: u64,
+    corpus_sha256: String,
     dist: String,
     /// Premise assertions, persisted HERE in the canonical result rather than in
     /// a side file, so the archive can prove what passed. Report generation
@@ -381,6 +392,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .pool_max_idle_per_host(args.connections)
     .build_http::<http_body_util::Full<bytes::Bytes>>();
 
+    // Corpus identity travels WITH the result. The corpus is too large to
+    // archive and is regenerated from a seed, so a hash in each record is the
+    // only way a reader can confirm two arms saw the same population.
+    let corpus_hash = if args.corpus.is_empty() {
+        String::new()
+    } else {
+        let bytes = std::fs::read(&args.corpus).unwrap_or_default();
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in &bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        format!("fnv1a64:{h:016x}")
+    };
     let corpus: Arc<Vec<String>> = Arc::new(if args.corpus.is_empty() {
         Vec::new()
     } else {
@@ -394,8 +419,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // independent of how long responses take. In closed-loop mode this is unused
     // and each worker simply issues the next request on completion.
     let open_loop = args.rate > 0.0;
-    let due = Arc::new(AtomicU64::new(0));
-    let t_origin = Instant::now();
+    // Counters kept SEPARATE. Conflating them is how "the generator could not
+    // keep up" and "the target rejected the load" become indistinguishable.
+    let scheduled = Arc::new(AtomicU64::new(0));
+    let sent = Arc::new(AtomicU64::new(0));
+    let (sched_tx, sched_rx_raw) = tokio::sync::mpsc::channel::<()>(1);
+    let sched_rx = Arc::new(tokio::sync::Mutex::new(sched_rx_raw));
 
     let mut handles = Vec::new();
     let samples: Arc<std::sync::Mutex<Vec<(u64, u8)>>> =
@@ -419,7 +448,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let http_client = http_client.clone();
         let target = targets[w % targets.len()].clone();
         let corpus = corpus.clone();
-        let due = due.clone();
+        let sched_rx = sched_rx.clone();
+        let sent = sent.clone();
 
         handles.push(tokio::spawn(async move {
             let mut grpc = chan.map(ClassifyClient::new);
@@ -430,30 +460,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 if open_loop {
-                    // Claim the next scheduled slot and wait until it is due.
-                    // Poisson spacing uses inverse-transform sampling on an
-                    // exponential, which is what makes the arrival process
-                    // memoryless rather than merely jittered.
-                    let slot = due.fetch_add(1, Ordering::Relaxed);
-                    let mean_gap = 1.0 / args.rate;
-                    let offset = if args.arrival == "constant" {
-                        slot as f64 * mean_gap
-                    } else {
-                        let mut z = slot.wrapping_mul(0x9E3779B97F4A7C15);
-                        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-                        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
-                        let u = (((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64)
-                            .max(1e-12);
-                        // Sum of exponentials approximated by mean spacing plus
-                        // this slot's exponential deviate; keeps the long-run
-                        // rate exact while the gaps stay memoryless.
-                        slot as f64 * mean_gap + (-u.ln() - 1.0) * mean_gap
-                    };
-                    let target_t = Duration::from_secs_f64(offset.max(0.0));
-                    let now = t_origin.elapsed();
-                    if target_t > now {
-                        tokio::time::sleep(target_t - now).await;
+                    // Take the next arrival from the CENTRAL schedule. The
+                    // schedule is generated by one task (below) rather than by
+                    // each worker computing its own slot: a per-worker slot
+                    // scheme lets workers claim future slots during warmup, and
+                    // those carry across the warmup boundary as a burst. That
+                    // bug inflated every measured rate by exactly
+                    // concurrency/window (1024/25s = 40.96 rps) and is why
+                    // 250 rps offered measured 290.9.
+                    if sched_rx.lock().await.recv().await.is_none() {
+                        break;
                     }
+                    sent.fetch_add(1, Ordering::Relaxed);
                 }
                 let is_measuring = measuring.load(Ordering::Relaxed);
                 // In mixed mode the warmup must POPULATE the warm keyspace, or
@@ -645,12 +663,74 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }));
     }
 
+    // ---- central arrival scheduler ----------------------------------------
+    //
+    // ONE task owns the arrival process. It emits a token per arrival; workers
+    // block on the channel, so a worker never runs ahead of the schedule and
+    // nothing can be claimed early and carried across a phase boundary.
+    //
+    // Poisson is generated as a genuine point process: the next arrival time is
+    // the previous one PLUS an exponential deviate (cumulative inter-arrival
+    // times). The previous implementation placed arrivals on an evenly spaced
+    // grid and jittered each one independently, which has the right mean rate
+    // but is not a Poisson process -- its counts are far less dispersed and it
+    // cannot produce the clustering that drives real queue growth.
+    let sched_handle = if open_loop {
+        let rate = args.rate;
+        let arrival = args.arrival.clone();
+        let scheduled_c = scheduled.clone();
+        let stop_c = stop.clone();
+        Some(tokio::spawn(async move {
+            let mean_gap = 1.0 / rate;
+            let mut next = 0.0f64;
+            let mut seed: u64 = 0x2545F4914F6CDD1D;
+            let origin = Instant::now();
+            loop {
+                if stop_c.load(Ordering::Relaxed) {
+                    break;
+                }
+                let gap = if arrival == "constant" {
+                    mean_gap
+                } else {
+                    // Inverse-transform exponential: -ln(U)/lambda.
+                    seed = seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    let z = seed ^ (seed >> 33);
+                    let u = ((z >> 11) as f64 / (1u64 << 53) as f64).max(1e-12);
+                    -u.ln() * mean_gap
+                };
+                next += gap;
+                let target_t = Duration::from_secs_f64(next);
+                let now = origin.elapsed();
+                if target_t > now {
+                    tokio::time::sleep(target_t - now).await;
+                }
+                scheduled_c.fetch_add(1, Ordering::Relaxed);
+                if sched_tx.send(()).await.is_err() {
+                    break;
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
     // ---- warmup ----
     let warm_target = args.warmup;
     while (warm_done.load(Ordering::Relaxed) as u64) < warm_target {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    // Let warmup traffic DRAIN before the measurement window opens. Without
+    // this, in-flight warmup requests complete inside the measured window and
+    // are attributed to it.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
     // ---- measure ----
+    // Reset the arrival accounting at the phase boundary so offered-rate
+    // attainment is computed over the measurement window alone.
+    scheduled.store(0, Ordering::Relaxed);
+    sent.store(0, Ordering::Relaxed);
     let started = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let t_start = Instant::now();
     measuring.store(true, Ordering::Relaxed);
@@ -667,7 +747,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for h in handles {
         let _ = h.await;
     }
+    if let Some(sh) = sched_handle {
+        sh.abort();
+    }
 
+    let sched_n = scheduled.load(Ordering::Relaxed);
+    let sent_n = sent.load(Ordering::Relaxed);
     let all = std::mem::take(&mut *samples.lock().unwrap());
     let measured = all.len() as u64;
     let errs = errors.load(Ordering::Relaxed);
@@ -699,12 +784,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "closed-loop".to_string()
         },
         offered_rate_rps: args.rate,
+        scheduled_requests: sched_n,
+        sent_requests: sent_n,
+        actual_offer_rps: sched_n as f64 / wall.max(1e-9),
+        offer_attainment: if open_loop && args.rate > 0.0 {
+            (sched_n as f64 / wall.max(1e-9)) / args.rate
+        } else { 1.0 },
+        completed_rps: ok_count as f64 / wall.max(1e-9),
+        rejected_rps: errs as f64 / wall.max(1e-9),
         rate_attainment: if open_loop && args.rate > 0.0 {
             (ok_count as f64 / wall.max(1e-9)) / args.rate
-        } else {
-            1.0
-        },
+        } else { 1.0 },
         corpus: args.corpus.clone(),
+        corpus_count: corpus.len() as u64,
+        corpus_sha256: corpus_hash.clone(),
         dist: args.dist.clone(),
         premises_passed: true,
         premise_notes: Vec::new(),
@@ -729,6 +822,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // archived, so the evidence could not demonstrate what had been validated.
     let mut report = report;
     let mut notes: Vec<String> = Vec::new();
+    // Overshoot is as disqualifying as undershoot: an arm that offered 16% MORE
+    // than its target was not measuring the rate it claims. The old check only
+    // looked for undershoot, so 250 rps offered / 291 achieved passed cleanly.
+    if open_loop && !(0.98..=1.02).contains(&report.offer_attainment) {
+        notes.push(format!(
+            "offer attainment {:.3} outside [0.98, 1.02]: the GENERATOR scheduled \
+             {:.1} rps against a {:.0} rps target, so this arm did not offer the \
+             load it claims",
+            report.offer_attainment, report.actual_offer_rps, args.rate));
+    }
     if open_loop && report.rate_attainment < 0.98 {
         if report.error_rate_pct > 5.0 {
             notes.push(format!(

@@ -14,10 +14,12 @@ to the instrument, not by a caveat in the prose.
 
 ## The corpus
 
-20,000 **unique** utterances (seed `20260903`, frozen and committed), spanning
+200,000 **unique** utterances (seed `20260903`, frozen and committed), spanning
 networking, Kubernetes, security, small/large code, reasoning, general QA,
 troubleshooting, conversation, malformed input, multilingual, and tool/JSON.
-Length: min 2 B, p50 93 B, p95 5,089 B, max 18,466 B.
+Length: min 2 B, p50 446 B, p95 8,744 B, max 18,717 B.
+
+Every result JSON records `corpus_count` and `corpus_sha256`, so two arms can be confirmed to have seen the same population even though the corpus itself is regenerated rather than archived.
 
 Uniqueness is enforced in the corpus so that *how often an utterance recurs* is
 the driver's decision, not the corpus's — `--dist uniform|zipf|hotset|unique`.
