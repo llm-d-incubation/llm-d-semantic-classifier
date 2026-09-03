@@ -57,9 +57,13 @@ def table(g, prefix, title, keyfn, note=""):
         L = lambda f: med([r["latency"][f] for r in reps])
         errs = sum(r["errors"] for r in reps)
         okp = all(r.get("premises_passed", True) for r in reps)
+        # p99.9 needs ~1000 samples to mean anything. Printing a number from 98
+        # samples invites it to be quoted; the audit found 18 such arms.
+        n_req = med([r["measured_requests"] for r in reps])
+        p999 = f"{L('p999_ms'):.2f}" if n_req >= 1000 else "n/a"
         o.append(f"| {keyfn(k)} | {len(reps)} | {med(rps):,.0f} | "
                  f"{lo:,.0f}–{hi:,.0f} | {L('p50_ms'):.2f} | {L('p90_ms'):.2f} | "
-                 f"{L('p95_ms'):.2f} | {L('p99_ms'):.2f} | {L('p999_ms'):.2f} | "
+                 f"{L('p95_ms'):.2f} | {L('p99_ms'):.2f} | {p999} | "
                  f"{L('max_ms'):.2f} | {L('mean_ms'):.2f} | {L('stddev_ms'):.2f} | "
                  f"{errs:,} | {'ok' if okp else '**FAILED**'} |")
     return "\n".join(o) + "\n"
@@ -111,7 +115,8 @@ def main():
     d = ["# Round 3 — statistical report", "",
          f"Generated from {len(rows)} captured runs across {len(g)} distinct arms, "
          "each replicated. Every figure is a median over independent repetitions with a "
-         "bootstrap 95% CI.", "",
+         "bootstrap 95% CI. `p99.9` reads `n/a` where an arm has fewer than 1,000 "
+         "measured requests, because it cannot be resolved from that sample.", "",
          "**Traffic:** frozen 200,000-utterance corpus (seed `20260903`), 12 domains, "
          "2 B–18 KB. **Config:** llm-d-sc at 16 workers / `RAYON_NUM_THREADS=1` / 16 CPU — "
          "Rayon pinned rather than left to track the CPU limit. **Arrival-rate arms are "
