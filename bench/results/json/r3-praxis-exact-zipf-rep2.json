@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "label": "r3-praxis-exact-zipf-rep2",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 32,
+  "connections": 32,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 98526,
+  "warmup_requests": 1500,
+  "measured_requests": 34316,
+  "wall_secs": 25.000812177,
+  "throughput_rps": 1372.5954083831602,
+  "throughput_rpm": 82355.72450298961,
+  "offered_concurrency": 32,
+  "load_mode": "closed-loop",
+  "offered_rate_rps": 0.0,
+  "rate_attainment": 1.0,
+  "corpus": "/work/corpus.jsonl",
+  "dist": "zipf",
+  "premises_passed": true,
+  "premise_notes": [],
+  "implied_mean_ms": 23.31349777549831,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 34316
+  },
+  "latency": {
+    "count": 34316,
+    "min_ms": 0.558685,
+    "mean_ms": 23.307581192155265,
+    "stddev_ms": 31.636238740903686,
+    "p50_ms": 13.112366,
+    "p90_ms": 54.583476,
+    "p95_ms": 120.530863,
+    "p99_ms": 140.445251,
+    "p999_ms": 160.219027,
+    "max_ms": 213.690559
+  },
+  "started_unix": 1788390901
+}

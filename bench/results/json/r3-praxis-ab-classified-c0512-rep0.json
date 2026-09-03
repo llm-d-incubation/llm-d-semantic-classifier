@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "label": "r3-praxis-ab-classified-c0512-rep0",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 512,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 41644,
+  "warmup_requests": 1500,
+  "measured_requests": 960629,
+  "wall_secs": 25.001028565,
+  "throughput_rps": 38423.5791540523,
+  "throughput_rpm": 2305414.749243138,
+  "offered_concurrency": 512,
+  "load_mode": "closed-loop",
+  "offered_rate_rps": 0.0,
+  "rate_attainment": 1.0,
+  "corpus": "/work/corpus.jsonl",
+  "dist": "zipf",
+  "premises_passed": true,
+  "premise_notes": [],
+  "implied_mean_ms": 13.325151151256103,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 960629
+  },
+  "latency": {
+    "count": 960629,
+    "min_ms": 0.619549,
+    "mean_ms": 13.299107989265368,
+    "stddev_ms": 34.81799895345597,
+    "p50_ms": 6.06747,
+    "p90_ms": 17.459943,
+    "p95_ms": 30.390643,
+    "p99_ms": 224.987248,
+    "p999_ms": 356.265942,
+    "max_ms": 599.251364
+  },
+  "started_unix": 1788392243
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "label": "r3-praxis-redis-semantic-uniform-rep1",
+  "mode": "http",
+  "targets": [
+    "http://praxis.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 32,
+  "connections": 32,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 51515,
+  "warmup_requests": 1500,
+  "measured_requests": 7730,
+  "wall_secs": 25.000837404,
+  "throughput_rps": 309.18964333423656,
+  "throughput_rpm": 18551.378600054195,
+  "offered_concurrency": 32,
+  "load_mode": "closed-loop",
+  "offered_rate_rps": 0.0,
+  "rate_attainment": 1.0,
+  "corpus": "/work/corpus.jsonl",
+  "dist": "uniform",
+  "premises_passed": true,
+  "premise_notes": [],
+  "implied_mean_ms": 103.49635147839585,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 7730
+  },
+  "latency": {
+    "count": 7730,
+    "min_ms": 0.866507,
+    "mean_ms": 103.44648908292368,
+    "stddev_ms": 73.56502874553934,
+    "p50_ms": 92.010236,
+    "p90_ms": 213.001696,
+    "p95_ms": 225.798386,
+    "p99_ms": 249.57895,
+    "p999_ms": 268.774138,
+    "max_ms": 305.109972
+  },
+  "started_unix": 1788391158
+}

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "label": "r3-llmd-rate00500-rep2",
+  "mode": "http",
+  "targets": [
+    "http://ipp-envoy.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 75422,
+  "warmup_requests": 1500,
+  "measured_requests": 13515,
+  "wall_secs": 25.000550704,
+  "throughput_rps": 540.588091839019,
+  "throughput_rpm": 32435.285510341135,
+  "offered_concurrency": 1024,
+  "load_mode": "open-loop-poisson",
+  "offered_rate_rps": 500.0,
+  "rate_attainment": 1.0811761836780378,
+  "corpus": "/work/corpus.jsonl",
+  "dist": "zipf",
+  "premises_passed": true,
+  "premise_notes": [],
+  "implied_mean_ms": 1894.2333644762114,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "HTTP_200": 13515
+  },
+  "latency": {
+    "count": 13515,
+    "min_ms": 0.737359,
+    "mean_ms": 9.596827412948574,
+    "stddev_ms": 27.998512153651408,
+    "p50_ms": 2.070985,
+    "p90_ms": 15.569911,
+    "p95_ms": 52.837554,
+    "p99_ms": 152.348181,
+    "p999_ms": 166.307292,
+    "max_ms": 214.997177
+  },
+  "started_unix": 1788392579
+}

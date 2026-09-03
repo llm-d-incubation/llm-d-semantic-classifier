@@ -23,7 +23,7 @@ Methodology rule 5: every result carries a manifest. This is it.
 | gateway node | `gf48cf2` · endpoints node | `gf49e9c` |
 | driver | `scbench` (this repo, `bench/driver`), closed-loop |
 | percentiles | nearest-rank, identical to `src/bench.rs::percentile` |
-| runs captured | 311 |
+| runs captured | 589 |
 
 ## Raw data
 

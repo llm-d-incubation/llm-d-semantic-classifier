@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "label": "r3-vsr-rate16000-rep2",
+  "mode": "classify",
+  "targets": [
+    "http://llm-d-sc-vsr-adapter.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 45744,
+  "warmup_requests": 1500,
+  "measured_requests": 400770,
+  "wall_secs": 25.001091538,
+  "throughput_rps": 3121.0637296135483,
+  "throughput_rpm": 187263.8237768129,
+  "offered_concurrency": 1024,
+  "load_mode": "open-loop-poisson",
+  "offered_rate_rps": 16000.0,
+  "rate_attainment": 0.19506648310084676,
+  "corpus": "/work/corpus.jsonl",
+  "dist": "zipf",
+  "premises_passed": false,
+  "premise_notes": [
+    "rate attainment 0.195 with 80.5% errors ({\"COMPLEX\": 12016, \"HTTP_502\": 249072, \"MEDIUM\": 34002, \"REASONING\": 10093, \"SIMPLE\": 21919, \"TRANSPORT_client error (Connect)\": 73668}): the target REJECTED the load -- diagnose the errors, not the generator"
+  ],
+  "implied_mean_ms": 328.0932684212738,
+  "errors": 322740,
+  "error_rate_pct": 80.52997978890636,
+  "status_counts": {
+    "COMPLEX": 12016,
+    "HTTP_502": 249072,
+    "MEDIUM": 34002,
+    "REASONING": 10093,
+    "SIMPLE": 21919,
+    "TRANSPORT_client error (Connect)": 73668
+  },
+  "latency": {
+    "count": 400770,
+    "min_ms": 0.176127,
+    "mean_ms": 36.963029553928685,
+    "stddev_ms": 58.85562413933762,
+    "p50_ms": 9.140265,
+    "p90_ms": 108.809243,
+    "p95_ms": 155.744769,
+    "p99_ms": 270.367337,
+    "p999_ms": 386.965424,
+    "max_ms": 796.087176
+  },
+  "started_unix": 1788395347
+}

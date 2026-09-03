@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "label": "r3-vsr-rate00250-rep2",
+  "mode": "classify",
+  "targets": [
+    "http://llm-d-sc-vsr-adapter.cnuland-dev.svc.cluster.local:8080"
+  ],
+  "concurrency": 1024,
+  "connections": 128,
+  "context_bytes": 256,
+  "cache_mode": "miss",
+  "hit_ratio": 0.9,
+  "keyspace": 1,
+  "run_id": 30105,
+  "warmup_requests": 1500,
+  "measured_requests": 7274,
+  "wall_secs": 25.001820507,
+  "throughput_rps": 290.93881375411956,
+  "throughput_rpm": 17456.328825247176,
+  "offered_concurrency": 1024,
+  "load_mode": "open-loop-poisson",
+  "offered_rate_rps": 250.0,
+  "rate_attainment": 1.1637552550164783,
+  "corpus": "/work/corpus.jsonl",
+  "dist": "zipf",
+  "premises_passed": true,
+  "premise_notes": [],
+  "implied_mean_ms": 3519.6403903172945,
+  "errors": 0,
+  "error_rate_pct": 0.0,
+  "status_counts": {
+    "COMPLEX": 1176,
+    "MEDIUM": 3119,
+    "REASONING": 904,
+    "SIMPLE": 2075
+  },
+  "latency": {
+    "count": 7274,
+    "min_ms": 0.177659,
+    "mean_ms": 4.035683738658235,
+    "stddev_ms": 18.91273310684365,
+    "p50_ms": 0.252415,
+    "p90_ms": 0.349147,
+    "p95_ms": 12.903971,
+    "p99_ms": 115.55,
+    "p999_ms": 118.903523,
+    "max_ms": 126.11568
+  },
+  "started_unix": 1788394837
+}
