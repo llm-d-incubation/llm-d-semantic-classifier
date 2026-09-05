@@ -70,12 +70,36 @@ impl CacheKey {
         taxonomy_revision: impl Into<String>,
         normalized_text: &str,
     ) -> Self {
+        Self::new_with_artifact_digest(
+            classifier_id,
+            model_revision,
+            tokenizer_revision,
+            taxonomy_revision,
+            normalized_text,
+            None,
+        )
+    }
+
+    /// Build a key with both the declared revision and the loaded artifact's
+    /// content digest. The optional digest is a separate length-prefixed field;
+    /// it never replaces the model revision. `None` preserves `new`'s identity.
+    pub fn new_with_artifact_digest(
+        classifier_id: impl Into<String>,
+        model_revision: impl Into<String>,
+        tokenizer_revision: impl Into<String>,
+        taxonomy_revision: impl Into<String>,
+        normalized_text: &str,
+        artifact_digest: Option<&str>,
+    ) -> Self {
         let mut hasher = blake3::Hasher::new();
         update_field(&mut hasher, &classifier_id.into());
         update_field(&mut hasher, &model_revision.into());
         update_field(&mut hasher, &tokenizer_revision.into());
         update_field(&mut hasher, &taxonomy_revision.into());
         update_field(&mut hasher, normalized_text);
+        if let Some(digest) = artifact_digest {
+            update_field(&mut hasher, digest);
+        }
         CacheKey {
             fingerprint: hasher.finalize().into(),
         }

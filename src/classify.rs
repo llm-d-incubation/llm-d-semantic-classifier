@@ -176,14 +176,13 @@ impl RuntimeMetadata {
     /// The identity components used to key the result cache. A change in ANY of
     /// them must produce a different key, so a stale classification can never be
     /// served across a revision or artifact change.
-    pub fn cache_identity(&self) -> (&str, &str, &str, &str) {
+    pub fn cache_identity(&self) -> (&str, &str, &str, &str, Option<&str>) {
         (
             &self.classifier_id,
-            self.artifact_digest
-                .as_deref()
-                .unwrap_or(&self.model_revision),
+            &self.model_revision,
             &self.tokenizer_revision,
             &self.taxonomy_revision,
+            self.artifact_digest.as_deref(),
         )
     }
 }
@@ -268,13 +267,15 @@ where
         // namespace: two taxonomies in one process would have collided, and a
         // revision change would have served the previous revision's answers.
         let meta = self.runtime.metadata();
-        let (classifier_id, model_rev, tokenizer_rev, taxonomy_rev) = meta.cache_identity();
-        let key = CacheKey::new(
+        let (classifier_id, model_rev, tokenizer_rev, taxonomy_rev, artifact_digest) =
+            meta.cache_identity();
+        let key = CacheKey::new_with_artifact_digest(
             classifier_id,
             model_rev,
             tokenizer_rev,
             taxonomy_rev,
             &normalized,
+            artifact_digest,
         );
         let metrics = self.metrics.clone();
         let forward = {
