@@ -12,6 +12,7 @@
   },
   "model": {
     "weights": "/models/model.safetensors",
+    "config": "/models/config.json",
     "tokenizer": "/models/tokenizer.json",
     "pooling_config": "/models/1_Pooling/config.json"
   },
