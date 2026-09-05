@@ -14,6 +14,7 @@ use crate::tokenizer::Tokenizer;
 /// can validate the ModelCar layout before loading (AC-002/AC-003).
 pub const MODELCAR_REQUIRED_FILES: &[&str] = &[
     "model.safetensors",
+    "config.json",
     "tokenizer.json",
     "1_Pooling/config.json",
 ];
@@ -266,7 +267,7 @@ mod tests {
     fn i064_incomplete_modelcar_fails_readiness() {
         // I-064 (AC-003): an incomplete/corrupt ModelCar must fail readiness.
         // The ModelCar manifest (classifier-manifest.json) requires the files
-        // `/models/model.safetensors`, `/models/tokenizer.json`, and
+        // `/models/model.safetensors`, `/models/config.json`, `/models/tokenizer.json`, and
         // `/models/1_Pooling/config.json` to be present and readable. A model
         // directory that exists but is missing these required files must keep
         // the runtime NOT ready.

@@ -4,7 +4,8 @@
 //! Hugging Face fetch, must reject an incomplete mount, and must be able to tie
 //! a served result to the exact bytes it loaded.
 //!
-//! Requires fetched weights; run with `cargo test --test modelcar -- --ignored`.
+//! Ignored tests require fetched weights; run with
+//! `cargo test --test modelcar -- --ignored`.
 
 use llm_d_sc::runtime::{modelcar_digest, Readiness, Runtime, MODELCAR_REQUIRED_FILES};
 
@@ -13,6 +14,52 @@ fn model_dir(name: &str) -> std::path::PathBuf {
         .join("artifacts")
         .join("models")
         .join(name)
+}
+
+/// I-062: changing only the architecture config must change artifact identity.
+#[test]
+fn i062_architecture_config_changes_digest() {
+    let dir = std::env::temp_dir().join(format!("llm-d-sc-i062-config-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("1_Pooling")).unwrap();
+    // Digesting uses real file bytes but does not require a loadable model.
+    for file in [
+        "model.safetensors",
+        "tokenizer.json",
+        "1_Pooling/config.json",
+    ] {
+        std::fs::write(dir.join(file), b"unchanged").unwrap();
+    }
+    let config = dir.join("config.json");
+    std::fs::write(&config, br#"{"hidden_size":384}"#).unwrap();
+    let before = modelcar_digest(&dir, MODELCAR_REQUIRED_FILES).unwrap();
+    assert_eq!(
+        before,
+        modelcar_digest(&dir, MODELCAR_REQUIRED_FILES).unwrap()
+    );
+
+    std::fs::write(&config, br#"{"hidden_size":768}"#).unwrap();
+    let after = modelcar_digest(&dir, MODELCAR_REQUIRED_FILES).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_ne!(before, after, "config.json must contribute to the digest");
+}
+
+/// I-060: a mount missing only the architecture config must fail readiness.
+#[test]
+fn i060_missing_architecture_config_fails_readiness() {
+    let dir = std::env::temp_dir().join(format!("llm-d-sc-i060-config-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("1_Pooling")).unwrap();
+    for file in MODELCAR_REQUIRED_FILES {
+        if *file != "config.json" {
+            std::fs::write(dir.join(file), b"present").unwrap();
+        }
+    }
+    let mut runtime = Runtime::new();
+    let result = runtime.warmup_modelcar(&dir, MODELCAR_REQUIRED_FILES);
+    std::fs::remove_dir_all(&dir).unwrap();
+    let error = result.expect_err("a ModelCar without config.json must fail warmup");
+    assert!(error.contains("config.json"), "{error}");
+    assert_eq!(runtime.readiness(), Readiness::NotReady);
+    assert_eq!(runtime.artifact_digest(), None);
 }
 
 /// I-060: the ModelCar must contain every required file, and a mount missing any
@@ -34,7 +81,7 @@ fn i060_modelcar_contains_required_files() {
 
     // Each required file, removed individually, must break warmup. Asserting
     // only on a wholly empty directory would pass even if the check looked at
-    // just one of the three.
+    // just one of the required files.
     for omit in MODELCAR_REQUIRED_FILES {
         let partial =
             std::env::temp_dir().join(format!("llm-d-sc-i060-{}", omit.replace('/', "_")));

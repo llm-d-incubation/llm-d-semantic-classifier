@@ -17,6 +17,18 @@ The project remains intentionally pre-1.0. Phase names describe maturity; versio
 
 ## 0.1 MVP
 
+### Unreleased fixes
+
+- ModelCar content digests now include the BERT architecture `config.json`,
+  alongside weights, tokenizer, and pooling configuration. All existing
+  ModelCar content digests change, even when artifact bytes are unchanged;
+  regenerate any recorded digest expectations. Cache identities derived from
+  these digests also change. Mounts missing `config.json` fail readiness checks.
+  Hugging Face revision pins and OCI image digests are unaffected. Fixes
+  [#4](https://github.com/llm-d-incubation/llm-d-semantic-classifier/issues/4).
+
+### Scope
+
 Prove the shape of the service:
 - Rust server and protobuf contract;
 - `ClassifierRuntime` abstraction;
