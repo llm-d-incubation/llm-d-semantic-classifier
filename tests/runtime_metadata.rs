@@ -7,10 +7,11 @@
 //! test happened to pass the one string the hardcoded check expected. These
 //! tests fail if any of that is reintroduced.
 //!
-//! Requires fetched weights; run with `cargo test --test runtime_metadata -- --ignored`.
+//! Ignored tests require fetched weights; run with
+//! `cargo test --test runtime_metadata -- --ignored`.
 
 use llm_d_sc::cache::CacheKey;
-use llm_d_sc::classify::{CandleClassifier, ClassifierRuntime, ServiceCore};
+use llm_d_sc::classify::{CandleClassifier, ClassifierRuntime, RuntimeMetadata, ServiceCore};
 use llm_d_sc::taxonomy::ClassifierDefinition;
 
 fn classifier(name: &str) -> CandleClassifier {
@@ -77,36 +78,86 @@ fn u111_different_classifiers_produce_different_cache_keys() {
     let b = classifier("sensitivity").metadata();
     assert_ne!(a.cache_identity(), b.cache_identity());
 
-    let (a1, a2, a3, a4) = a.cache_identity();
-    let (b1, b2, b3, b4) = b.cache_identity();
+    let (a1, a2, a3, a4, a5) = a.cache_identity();
+    let (b1, b2, b3, b4, b5) = b.cache_identity();
     let text = "an identical prompt sent to both classifiers";
     assert_ne!(
-        CacheKey::new(a1, a2, a3, a4, text),
-        CacheKey::new(b1, b2, b3, b4, text),
+        CacheKey::new_with_artifact_digest(a1, a2, a3, a4, text, a5),
+        CacheKey::new_with_artifact_digest(b1, b2, b3, b4, text, b5),
         "the same text under two taxonomies must not collide in the cache"
     );
 }
 
 /// U-112: a change in ANY identity component changes the key.
 #[test]
-#[ignore]
 fn u112_every_identity_component_participates_in_the_cache_key() {
-    let m = classifier("complexity").metadata();
-    let (c, mo, tk, tx) = m.cache_identity();
-    let text = "a stable prompt";
-    let base = CacheKey::new(c, mo, tk, tx, text);
-
-    for (label, key) in [
-        ("classifier_id", CacheKey::new("other", mo, tk, tx, text)),
-        ("model/digest", CacheKey::new(c, "other", tk, tx, text)),
-        (
+    let original = RuntimeMetadata {
+        classifier_id: "complexity".into(),
+        signal: "complexity".into(),
+        model_revision: "model-rev".into(),
+        tokenizer_revision: "tokenizer-rev".into(),
+        taxonomy_revision: "taxonomy-rev".into(),
+        artifact_digest: Some("blake3:artifact".into()),
+    };
+    let key = |m: &RuntimeMetadata| {
+        let (c, mo, tk, tx, digest) = m.cache_identity();
+        CacheKey::new_with_artifact_digest(c, mo, tk, tx, "a stable prompt", digest)
+    };
+    // Exercise metadata before key construction: substituting the digest for
+    // the revision must not hide revision changes from this test.
+    for digest in [Some("blake3:artifact".to_string()), None] {
+        let mut base = original.clone();
+        base.artifact_digest = digest;
+        assert_eq!(key(&base), key(&base.clone()));
+        for field in [
+            "classifier_id",
+            "model_revision",
             "tokenizer_revision",
-            CacheKey::new(c, mo, "other", tx, text),
-        ),
-        ("taxonomy_revision", CacheKey::new(c, mo, tk, "other", text)),
-    ] {
-        assert_ne!(base, key, "changing {label} must change the cache key");
+            "taxonomy_revision",
+            "artifact_digest",
+        ] {
+            let mut changed = base.clone();
+            match field {
+                "classifier_id" => changed.classifier_id = "other".into(),
+                "model_revision" => changed.model_revision = "other".into(),
+                "tokenizer_revision" => changed.tokenizer_revision = "other".into(),
+                "taxonomy_revision" => changed.taxonomy_revision = "other".into(),
+                "artifact_digest" => changed.artifact_digest = Some("blake3:other".into()),
+                _ => unreachable!(),
+            }
+            assert_ne!(
+                key(&base),
+                key(&changed),
+                "changing {field} must change the cache key"
+            );
+        }
     }
+}
+
+/// U-112: optional digests and adjacent variable-length fields cannot alias.
+#[test]
+fn u112_digest_presence_and_field_boundaries_are_distinct() {
+    let key = |revision, text, digest| {
+        CacheKey::new_with_artifact_digest("c", revision, "t", "x", text, digest)
+    };
+    assert_eq!(
+        CacheKey::new("c", "revision", "t", "x", "prompt"),
+        key("revision", "prompt", None)
+    );
+    for digest in ["", "revision"] {
+        assert_ne!(
+            key("revision", "prompt", None),
+            key("revision", "prompt", Some(digest))
+        );
+    }
+    assert_ne!(
+        key("ab", "prompt", Some("c")),
+        key("a", "prompt", Some("bc"))
+    );
+    assert_ne!(
+        key("revision", "ab", Some("c")),
+        key("revision", "a", Some("bc"))
+    );
 }
 
 /// U-113: ServiceCore reports the WRAPPED backend's identity, not its own.
