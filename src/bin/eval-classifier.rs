@@ -216,7 +216,7 @@ fn main() {
         for (t, truth, pred, c) in errors.iter().take(25) {
             println!(
                 "  {truth} -> {pred} (conf {c:.2})  \"{}\"",
-                &t[..t.len().min(72)]
+                &t[..t.char_indices().map(|(i, _)| i).take_while(|&i| i <= 72).last().unwrap_or(0)]
             );
         }
     }
