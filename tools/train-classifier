@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Contrastive finetuning of a sentence-transformer on classifier anchors,
+# with optional evaluation via the Rust eval-classifier binary.
+#
+# Usage:
+#   tools/train-classifier --classifier classifiers/space-ops.json
+#   tools/train-classifier --classifier classifiers/space-ops.json \
+#       --dataset evals/datasets/space-ops-heldout.jsonl
+#   tools/train-classifier --classifier classifiers/space-ops.json \
+#       --labels TELEMETRY,REASONING --epochs 20
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+CLASSIFIER=""
+LABELS=""
+BASE_MODEL=""
+OUTPUT=""
+DATASET=""
+EPOCHS=10
+BATCH_SIZE=16
+WARMUP_RATIO=0.1
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --classifier)    CLASSIFIER="${2:?--classifier needs a path}"; shift 2;;
+    --labels)        LABELS="${2:?--labels needs a comma-separated list}"; shift 2;;
+    --base-model)    BASE_MODEL="$2"; shift 2;;
+    --output)        OUTPUT="$2"; shift 2;;
+    --dataset)       DATASET="$2"; shift 2;;
+    --epochs)        EPOCHS="$2"; shift 2;;
+    --batch-size)    BATCH_SIZE="$2"; shift 2;;
+    --warmup-ratio)  WARMUP_RATIO="$2"; shift 2;;
+    -h|--help)
+      echo "Usage: tools/train-classifier --classifier <json> [options]"
+      echo ""
+      echo "Options:"
+      echo "  --classifier <json>   Classifier definition (required)"
+      echo "  --labels <list>       Comma-separated labels to train on (default: all)"
+      echo "  --base-model <repo>   Base model (default: all-MiniLM-L6-v2)"
+      echo "  --output <dir>        Output directory (default: artifacts/models/<id>-ft)"
+      echo "  --dataset <jsonl>     Held-out dataset for evaluation"
+      echo "  --epochs <n>          Training epochs (default: 10)"
+      echo "  --batch-size <n>      Batch size (default: 16)"
+      echo "  --warmup-ratio <f>    Warmup ratio (default: 0.1)"
+      exit 0;;
+    *) echo "[train-classifier] unknown argument: $1" >&2; exit 2;;
+  esac
+done
+
+if [ -z "$CLASSIFIER" ]; then
+  echo "[train-classifier] error: --classifier is required" >&2
+  exit 2
+fi
+
+if [ ! -f "$CLASSIFIER" ]; then
+  echo "[train-classifier] error: classifier not found: $CLASSIFIER" >&2
+  exit 1
+fi
+
+if [ -n "$DATASET" ] && [ ! -f "$DATASET" ]; then
+  echo "[train-classifier] error: dataset not found: $DATASET" >&2
+  exit 1
+fi
+
+# Resolve output directory default from classifier_id.
+if [ -z "$OUTPUT" ]; then
+  CLASSIFIER_ID=$(python3 -c "import json; print(json.load(open('$CLASSIFIER'))['classifier_id'])")
+  OUTPUT="artifacts/models/${CLASSIFIER_ID}-ft"
+fi
+
+# Check Python venv.
+if [ ! -x "sc/bin/python3" ]; then
+  echo "[train-classifier] error: Python venv not found at sc/" >&2
+  echo "  set it up with:" >&2
+  echo "    python3 -m venv sc" >&2
+  echo "    sc/bin/pip install -r tools/requirements.txt" >&2
+  exit 1
+fi
+
+if ! sc/bin/python3 -c "import sentence_transformers" 2>/dev/null; then
+  echo "[train-classifier] error: sentence-transformers not installed" >&2
+  echo "  install with: sc/bin/pip install -r tools/requirements.txt" >&2
+  exit 1
+fi
+
+# Build training args.
+TRAIN_ARGS=(train --classifier "$CLASSIFIER" --output "$OUTPUT"
+            --epochs "$EPOCHS" --batch-size "$BATCH_SIZE"
+            --warmup-ratio "$WARMUP_RATIO")
+
+[ -n "$LABELS" ]     && TRAIN_ARGS+=(--labels "$LABELS")
+[ -n "$BASE_MODEL" ] && TRAIN_ARGS+=(--base-model "$BASE_MODEL")
+
+# --- Training ---
+sc/bin/python3 tools/train_classifier.py "${TRAIN_ARGS[@]}"
+
+# --- Evaluation (if dataset provided) ---
+if [ -n "$DATASET" ]; then
+  # Ensure the Rust eval binary is built.
+  if [ ! -x "target/release/eval-classifier" ]; then
+    echo ""
+    echo "[train-classifier] building eval-classifier..."
+    cargo build --release --bin eval-classifier 2>&1 | tail -1
+  fi
+
+  EVAL_RAW="$OUTPUT/eval-raw.json"
+
+  target/release/eval-classifier \
+    --model "$OUTPUT" \
+    --classifier "$CLASSIFIER" \
+    --dataset "$DATASET" \
+    --json "$EVAL_RAW" > /dev/null
+
+  POST_ARGS=(post-eval --raw-report "$EVAL_RAW" --output "$OUTPUT/eval-report.json")
+  [ -n "$LABELS" ] && POST_ARGS+=(--trained-labels "$LABELS")
+
+  sc/bin/python3 tools/train_classifier.py "${POST_ARGS[@]}"
+
+  rm -f "$EVAL_RAW"
+fi
