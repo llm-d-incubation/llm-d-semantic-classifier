@@ -12,6 +12,7 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | U-004 | duplicate classifier ID rejected | 0.1 |
 | U-005 | invalid model path rejected | 0.1 |
 | U-006 | immutable revision required in production profile | 0.20 |
+| U-007 | cache eviction configuration defaults to FIFO and validates FIFO/LRU | 0.22 |
 | U-010 | classification response schema contains no final route/endpoint | 0.1 |
 | U-011 | unknown signal explicit error | 0.1 |
 | U-012 | empty input follows contract | 0.1 |
@@ -37,7 +38,7 @@ Test IDs are evidence anchors. Each version's `test-plan.md` selects the require
 | U-043 | cache key changes with tokenizer revision | 0.1 |
 | U-044 | cache key changes with taxonomy/prototype revision | 0.1 |
 | U-045 | cache key changes with preprocessing contract | 0.20 |
-| U-046 | cache capacity/eviction works under concurrency | 0.22 |
+| U-046 | FIFO/LRU cache capacity and eviction work under concurrency | 0.22 |
 | U-047 | stale revision never returned after activation change | 0.22 |
 | U-048 | insufficient context yields abstain, not benign label | 0.22 |
 | U-049 | full-context recomputation after cache loss matches prior result tolerance | 0.22 |

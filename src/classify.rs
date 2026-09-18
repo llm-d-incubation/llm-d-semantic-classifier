@@ -27,7 +27,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::cache::{
-    identity_tag, CacheKey, CachePath, NoopSemanticCache, SemanticCache, SharedCache,
+    identity_tag, CacheEvictionPolicy, CacheKey, CachePath, NoopSemanticCache, SemanticCache,
+    SharedCache,
 };
 use crate::metrics::{LatencyStage, Metrics};
 use crate::ranker::{anchor_rank, cosine_rank, AnchorSet, Prototype};
@@ -347,6 +348,11 @@ where
         Self::with_metrics(runtime, Metrics::new())
     }
 
+    /// Build a service core with an explicit stored-entry eviction policy.
+    pub fn with_cache_policy(runtime: R, policy: CacheEvictionPolicy) -> Self {
+        Self::with_metrics_and_cache_policy(runtime, Metrics::new(), policy)
+    }
+
     /// Build a service core whose cache and hit/miss/total/queue metrics record
     /// into the CALLER-SUPPLIED [`Metrics`] handle, so the backend's own
     /// tokenize/forward stage recording can share the same registry. The L2
@@ -354,10 +360,38 @@ where
     /// so behaviour is UNCHANGED unless a semantic cache is opted into via
     /// [`ServiceCore::with_semantic_cache`].
     pub fn with_metrics(runtime: R, metrics: Metrics) -> Self {
+        Self::with_metrics_and_cache_policy(runtime, metrics, CacheEvictionPolicy::Fifo)
+    }
+
+    /// Build a service core with caller-supplied metrics and an explicit cache
+    /// eviction policy. Single-flight remains owned by [`SharedCache`].
+    pub fn with_metrics_and_cache_policy(
+        runtime: R,
+        metrics: Metrics,
+        policy: CacheEvictionPolicy,
+    ) -> Self {
+        Self::with_cache(runtime, metrics, SharedCache::with_policy(policy))
+    }
+
+    /// Build a service core with a supplied cache. This permits bounded,
+    /// small-capacity construction in policy tests without weakening the
+    /// production default capacity.
+    pub fn with_cache(runtime: R, metrics: Metrics, cache: SharedCache) -> Self {
+        Self::with_cache_and_semantic(runtime, metrics, cache, Arc::new(NoopSemanticCache))
+    }
+
+    /// Build a service core with explicit L1 exact-cache storage and L2
+    /// semantic-cache implementations.
+    pub fn with_cache_and_semantic(
+        runtime: R,
+        metrics: Metrics,
+        cache: SharedCache,
+        semantic: Arc<dyn SemanticCache>,
+    ) -> Self {
         ServiceCore {
             runtime: Arc::new(runtime),
-            cache: SharedCache::new(),
-            semantic: Arc::new(NoopSemanticCache),
+            cache,
+            semantic,
             prefilter: Arc::new(crate::cache::text::NoopTextCache),
             metrics,
         }
@@ -369,13 +403,7 @@ where
         metrics: Metrics,
         semantic: Arc<dyn SemanticCache>,
     ) -> Self {
-        ServiceCore {
-            runtime: Arc::new(runtime),
-            cache: SharedCache::new(),
-            semantic,
-            prefilter: Arc::new(crate::cache::text::NoopTextCache),
-            metrics,
-        }
+        Self::with_cache_and_semantic(runtime, metrics, SharedCache::new(), semantic)
     }
 
     /// Build a service core with an explicit L0 text prefilter.
@@ -396,6 +424,11 @@ where
             prefilter,
             metrics,
         }
+    }
+
+    /// The stored-entry eviction policy selected for this core.
+    pub fn cache_policy(&self) -> CacheEvictionPolicy {
+        self.cache.policy()
     }
 
     /// A SHARED handle to the core's metrics registry.
@@ -1216,6 +1249,42 @@ mod tests {
             snapshot.cache_coalesced, 0,
             "delta context must not join a cache flight"
         );
+    }
+
+    #[test]
+    fn i033_service_core_uses_the_supplied_lru_cache() {
+        let cache = SharedCache::with_capacity_and_policy(2, CacheEvictionPolicy::Lru);
+        let core = ServiceCore::with_cache(
+            ClassifyService::from_synthetic_fixtures(),
+            Metrics::new(),
+            cache,
+        );
+        let input = |text: &str| ClassificationInput {
+            text: text.to_string(),
+            requested_signals: vec!["sensitivity".to_string()],
+            session_metadata: HashMap::new(),
+            context_completeness: ContextCompleteness::Full,
+        };
+
+        core.classify(input("first prompt")).unwrap();
+        core.classify(input("second prompt")).unwrap();
+        core.classify(input("first prompt")).unwrap();
+        core.classify(input("third prompt")).unwrap();
+        assert_eq!(core.forward_count(), 3);
+
+        core.classify(input("second prompt")).unwrap();
+        assert_eq!(
+            core.forward_count(),
+            4,
+            "the core must use LRU and recompute its least recently used entry"
+        );
+        assert_eq!(core.cache_policy(), CacheEvictionPolicy::Lru);
+    }
+
+    #[test]
+    fn u007_service_core_existing_constructors_default_to_fifo() {
+        let core = ServiceCore::new(ClassifyService::from_synthetic_fixtures());
+        assert_eq!(core.cache_policy(), CacheEvictionPolicy::Fifo);
     }
 
     /// The real Candle embedder+ranker path implementing [`ClassifierRuntime`].

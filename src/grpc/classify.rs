@@ -24,6 +24,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::cache::CacheEvictionPolicy;
 use crate::classify::ClassifyError;
 use crate::handoff::InferenceExecutor;
 use crate::metrics::{Metrics, MetricsSnapshot};
@@ -156,13 +157,32 @@ where
     /// snapshots (AC-008/AC-012). The raw backend must share that registry for
     /// its tokenize/forward stage recording.
     pub fn with_executor(service: R, telemetry: Telemetry, metrics: Metrics, bound: usize) -> Self {
-        let core = crate::classify::ServiceCore::with_metrics(service, metrics.clone());
-        let executor = InferenceExecutor::spawn(core, metrics.clone(), bound);
-        Self {
+        Self::with_executor_and_cache_policy(
+            service,
             telemetry,
             metrics,
-            executor: Arc::new(executor),
-        }
+            bound,
+            CacheEvictionPolicy::Fifo,
+        )
+    }
+
+    /// Build a classify service with an explicit stored-entry cache policy.
+    /// The policy does not alter the executor bound or single-flight behavior.
+    pub fn with_executor_and_cache_policy(
+        service: R,
+        telemetry: Telemetry,
+        metrics: Metrics,
+        bound: usize,
+        cache_policy: CacheEvictionPolicy,
+    ) -> Self {
+        Self::with_executor_and_caches(
+            service,
+            telemetry,
+            metrics,
+            bound,
+            cache_policy,
+            Arc::new(crate::cache::NoopSemanticCache),
+        )
     }
 
     /// Like [`ClassifyServiceImpl::with_executor`] but wraps the backend in a
@@ -176,8 +196,32 @@ where
         bound: usize,
         semantic: Arc<dyn crate::cache::SemanticCache>,
     ) -> Self {
-        let core =
-            crate::classify::ServiceCore::with_semantic_cache(service, metrics.clone(), semantic);
+        Self::with_executor_and_caches(
+            service,
+            telemetry,
+            metrics,
+            bound,
+            CacheEvictionPolicy::Fifo,
+            semantic,
+        )
+    }
+
+    /// Build a classify service with explicit L1 eviction and L2 semantic-cache
+    /// policies. The cache tiers share the existing executor and metrics path.
+    pub fn with_executor_and_caches(
+        service: R,
+        telemetry: Telemetry,
+        metrics: Metrics,
+        bound: usize,
+        cache_policy: CacheEvictionPolicy,
+        semantic: Arc<dyn crate::cache::SemanticCache>,
+    ) -> Self {
+        let core = crate::classify::ServiceCore::with_cache_and_semantic(
+            service,
+            metrics.clone(),
+            crate::cache::SharedCache::with_policy(cache_policy),
+            semantic,
+        );
         let executor = InferenceExecutor::spawn(core, metrics.clone(), bound);
         Self {
             telemetry,
@@ -386,6 +430,16 @@ impl ClassifyServer {
         addr: impl AsRef<str>,
         classifier: crate::classify::CandleClassifier,
     ) -> io::Result<ClassifyServer> {
+        Self::bind_with_classifier_and_cache_policy(addr, classifier, CacheEvictionPolicy::Fifo)
+    }
+
+    /// Bind the production Candle classifier with an explicit stored-entry
+    /// cache eviction policy. FIFO remains the default wrapper above.
+    pub fn bind_with_classifier_and_cache_policy(
+        addr: impl AsRef<str>,
+        classifier: crate::classify::CandleClassifier,
+        cache_policy: CacheEvictionPolicy,
+    ) -> io::Result<ClassifyServer> {
         // The server surface shares the classifier's own metrics handle, so the
         // cache-hit/miss counters and the tokenize/forward stages recorded by the
         // real Candle forward are visible to a benchmark harness (AC-012).
@@ -441,11 +495,12 @@ impl ClassifyServer {
         } else {
             Arc::new(crate::cache::NoopSemanticCache)
         };
-        let service = ClassifyServiceImpl::with_executor_and_cache(
+        let service = ClassifyServiceImpl::with_executor_and_caches(
             classifier,
             telemetry.clone(),
             metrics.clone(),
             DEFAULT_QUEUE_BOUND,
+            cache_policy,
             semantic,
         );
         Self::serve(

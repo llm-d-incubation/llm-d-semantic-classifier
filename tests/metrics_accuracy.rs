@@ -21,6 +21,7 @@
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
+use llm_d_sc::cache::CacheEvictionPolicy;
 use llm_d_sc::classify::{
     CandleClassifier, ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError,
     ClassifyStatus, Embedding, RankedSignal, RuntimeMetadata, ServiceCore,
@@ -103,37 +104,43 @@ impl ClassifierRuntime for SlowRuntime {
 #[test]
 fn coalesced_waiters_counted_in_metrics() {
     const CONCURRENCY: usize = 8;
-    let metrics = Metrics::new();
-    let core = Arc::new(ServiceCore::with_metrics(SlowRuntime, metrics.clone()));
+    for policy in [CacheEvictionPolicy::Fifo, CacheEvictionPolicy::Lru] {
+        let metrics = Metrics::new();
+        let core = Arc::new(ServiceCore::with_metrics_and_cache_policy(
+            SlowRuntime,
+            metrics.clone(),
+            policy,
+        ));
 
-    let barrier = Arc::new(Barrier::new(CONCURRENCY));
-    let handles: Vec<_> = (0..CONCURRENCY)
-        .map(|_| {
-            let core = Arc::clone(&core);
-            let barrier = Arc::clone(&barrier);
-            std::thread::spawn(move || {
-                barrier.wait();
-                core.classify(input("identical burst key"))
+        let barrier = Arc::new(Barrier::new(CONCURRENCY));
+        let handles: Vec<_> = (0..CONCURRENCY)
+            .map(|_| {
+                let core = Arc::clone(&core);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    core.classify(input("identical burst key"))
+                })
             })
-        })
-        .collect();
-    for h in handles {
-        h.join().unwrap().expect("burst must succeed");
-    }
+            .collect();
+        for h in handles {
+            h.join().unwrap().expect("burst must succeed");
+        }
 
-    let snap = metrics.snapshot();
-    assert_eq!(
-        snap.cache_hits + snap.cache_misses + snap.cache_coalesced,
-        CONCURRENCY as u64,
-        "all requests must be accounted for"
-    );
-    assert_eq!(snap.cache_misses, 1, "exactly one designated forwarder");
-    assert_eq!(
-        snap.cache_coalesced,
-        (CONCURRENCY as u64) - 1,
-        "all other threads must be counted as coalesced"
-    );
-    assert_eq!(snap.cache_hits, 0, "cold cache must report 0 true hits");
+        let snap = metrics.snapshot();
+        assert_eq!(
+            snap.cache_hits + snap.cache_misses + snap.cache_coalesced,
+            CONCURRENCY as u64,
+            "{policy:?}: all requests must be accounted for"
+        );
+        assert_eq!(snap.cache_misses, 1, "exactly one designated forwarder");
+        assert_eq!(
+            snap.cache_coalesced,
+            (CONCURRENCY as u64) - 1,
+            "all other threads must be counted as coalesced"
+        );
+        assert_eq!(snap.cache_hits, 0, "cold cache must report 0 true hits");
+    }
 }
 
 /// U-081 (AC-012): mixed workload — hit/miss/coalesced counters match the

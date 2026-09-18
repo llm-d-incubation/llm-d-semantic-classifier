@@ -7,6 +7,8 @@
 use serde::Deserialize;
 use std::collections::HashSet;
 
+pub use crate::cache::CacheEvictionPolicy;
+
 /// Runtime backends this crate can currently host.
 pub const KNOWN_BACKENDS: &[&str] = &["candle"];
 
@@ -18,7 +20,17 @@ pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
+    pub cache: ExactCacheConfig,
+    #[serde(default)]
     pub classifiers: Vec<ClassifierConfig>,
+}
+
+/// L1 exact-result cache configuration parsed from the service TOML.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ExactCacheConfig {
+    /// Stored-entry eviction policy. FIFO preserves the historical default.
+    #[serde(default)]
+    pub eviction: CacheEvictionPolicy,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -169,6 +181,7 @@ mod tests {
     fn u001_minimal_valid_configuration_parses() {
         let cfg = Config::parse(minimal_toml()).expect("minimal valid config should parse");
         assert_eq!(cfg.server.listen, "0.0.0.0:50051");
+        assert_eq!(cfg.cache.eviction, CacheEvictionPolicy::Fifo);
         assert_eq!(cfg.classifiers.len(), 1);
         assert_eq!(cfg.classifiers[0].id, "sensitivity");
         assert_eq!(cfg.classifiers[0].backend, "candle");
@@ -321,6 +334,35 @@ mod tests {
         match CacheConfig::from_env_with(get) {
             Err(ConfigError::InvalidThreshold(v)) => assert!(v.is_nan()),
             other => panic!("expected InvalidThreshold, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn u007_omitted_cache_section_and_eviction_default_to_fifo() {
+        let cfg = Config::parse(minimal_toml()).unwrap();
+        assert_eq!(cfg.cache, ExactCacheConfig::default());
+
+        let with_empty_cache = minimal_toml().replace("[server]", "[cache]\n\n[server]");
+        let cfg = Config::parse(&with_empty_cache).unwrap();
+        assert_eq!(cfg.cache.eviction, CacheEvictionPolicy::Fifo);
+    }
+
+    #[test]
+    fn u007_explicit_lru_cache_policy_parses() {
+        let raw = minimal_toml().replace("[server]", "[cache]\neviction = \"lru\"\n\n[server]");
+        let cfg = Config::parse(&raw).unwrap();
+        assert_eq!(cfg.cache.eviction, CacheEvictionPolicy::Lru);
+    }
+
+    #[test]
+    fn u007_invalid_cache_policy_is_rejected() {
+        let raw = minimal_toml().replace("[server]", "[cache]\neviction = \"random\"\n\n[server]");
+        match Config::parse(&raw) {
+            Err(ConfigError::Parse(message)) => {
+                assert!(message.contains("unsupported cache eviction policy 'random'"));
+                assert!(message.contains("expected 'fifo' or 'lru'"));
+            }
+            other => panic!("expected cache policy parse error, got {other:?}"),
         }
     }
 }
