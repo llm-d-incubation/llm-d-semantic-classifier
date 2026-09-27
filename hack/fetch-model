@@ -57,7 +57,7 @@ case "$CLASSIFIER" in
     ;;
   cost)
     REPO="cnuland/llm-d-sc-cost"
-    REV="main"
+    REV="685354650683112d7a13209a90ced7e5656d1245"
     TARGET="artifacts/models/cost"
     FILES=("model.safetensors" "tokenizer.json" "config.json" "modules.json"
            "1_Pooling/config.json")

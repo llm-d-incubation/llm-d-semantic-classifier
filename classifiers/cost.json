@@ -2,8 +2,8 @@
   "classifier_id": "cost",
   "signal": "cost",
   "taxonomy_revision": "cost-anchors-v1",
-  "model_repo": "sentence-transformers/all-MiniLM-L6-v2",
-  "model_revision": "c9745ed1d9f207416be6d2e6f8de32d1f16199bf",
+  "model_repo": "cnuland/llm-d-sc-cost",
+  "model_revision": "685354650683112d7a13209a90ced7e5656d1245",
   "method": "anchor-topk-mean",
   "top_k": 3,
   "labels": [
@@ -62,5 +62,5 @@
       "Draft an exhaustive grant proposal including budget, methodology, literature review, and appendices."
     ]
   },
-  "provenance": "Anchors authored by the llm-d-sc maintainers. No fine-tuned cost model exists yet; this taxonomy runs on a general-purpose embedder and its measured accuracy is reported in docs/benchmarks/."
+  "provenance": "Anchors authored by the llm-d-sc maintainers. The cost classifier is served from the pinned llm-d-sc-cost artifact; its measured accuracy is reported in docs/benchmarks/."
 }
