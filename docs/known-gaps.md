@@ -19,7 +19,6 @@ acceptance criterion, every required test ID, and its execution status.
 | --- | --- | --- |
 | Insufficient context is not inferred automatically | `ABSTAIN` is emitted when a gateway explicitly marks context as delta-only. The service does not yet infer insufficient context from text, and it has no optional session feature cache to recover it | 0.22 |
 | Scores are similarities, not calibrated probabilities | ranked scores are cosine similarities against labelled anchors. They are comparable within one response, which makes the margin between the top two meaningful, but not across models or taxonomies, and should not be read as statistical confidence | 0.21 |
-| Result cache eviction is FIFO | the cache is bounded (50k entries) so memory is finite, but eviction is insertion-order rather than least-recently-used. FIFO was chosen because it bounds memory at one push and one pop per insert, while LRU needs recency bookkeeping on every hit and a hit is 632 nanoseconds | 0.22 |
 
 ## Capability
 
@@ -61,6 +60,7 @@ Listed so the history is legible rather than quietly rewritten.
 
 | Was | Closed by |
 | --- | --- |
+| Result cache eviction was fixed to FIFO | FIFO remains the compatible default; operators can opt into bounded LRU eviction with `LLM_D_SC_CACHE_EVICTION=lru` |
 | Model forward ran on a Tokio network worker | bounded handoff to a dedicated executor thread pool (`I-090`, with `I-091` as the serialisation control) |
 | Concurrency 4 raised miss latency roughly fourfold with no throughput gain | measured after the pool fix (`P-020`/`P-021`): 24 misses take 189.5 ms at width 1 and 44.3 ms at width 4, a 4.27x throughput gain, while forward p50 goes 7.68 ms to 7.17 ms. Added concurrency no longer costs latency |
 | Production path bypassed the result cache and metrics | the real path runs through the shared `ServiceCore` |
