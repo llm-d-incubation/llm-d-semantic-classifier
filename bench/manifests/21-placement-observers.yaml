@@ -1,0 +1,45 @@
+# Low-rate observers for the placement-evidence arm.  They deliberately do not
+# replace bench-driver: the normal campaign keeps its high-capacity driver off
+# the target node.  These two Pods are otherwise byte-for-byte equivalent, and
+# the evidence runner verifies their *actual* nodes before it sends traffic.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-placement-same
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-bench, component: placement-observer, arm: same-node}
+spec:
+  restartPolicy: Never
+  nodeSelector: {kubernetes.io/hostname: gf41fb2}
+  containers:
+    - name: observer
+      image: debian:bookworm-slim
+      command: ["sleep", "infinity"]
+      volumeMounts: [{name: work, mountPath: /work}]
+      resources:
+        requests: {cpu: "100m", memory: 256Mi}
+        limits:   {cpu: "250m", memory: 512Mi}
+  volumes:
+    - name: work
+      persistentVolumeClaim: {claimName: bench-workspace}
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-placement-cross
+  namespace: cnuland-dev
+  labels: {app: llm-d-sc-bench, component: placement-observer, arm: cross-node}
+spec:
+  restartPolicy: Never
+  nodeSelector: {kubernetes.io/hostname: gd91fda}
+  containers:
+    - name: observer
+      image: debian:bookworm-slim
+      command: ["sleep", "infinity"]
+      volumeMounts: [{name: work, mountPath: /work}]
+      resources:
+        requests: {cpu: "100m", memory: 256Mi}
+        limits:   {cpu: "250m", memory: 512Mi}
+  volumes:
+    - name: work
+      persistentVolumeClaim: {claimName: bench-workspace}
