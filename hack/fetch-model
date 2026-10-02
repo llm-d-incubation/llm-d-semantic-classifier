@@ -73,13 +73,22 @@ case "$CLASSIFIER" in
     echo "[fetch-model] unknown classifier '$CLASSIFIER' (try --list)" >&2; exit 2;;
 esac
 
+SOURCE_RECORD="$TARGET/.fetch-model-source"
 missing=0
 for f in "${FILES[@]}"; do
   [ -s "$TARGET/$f" ] || { echo "[fetch-model] missing or empty: $TARGET/$f"; missing=1; }
 done
-if [ "$missing" -eq 0 ]; then
+source_matches=0
+if [ -f "$SOURCE_RECORD" ] && [ "$(sed -n '1p' "$SOURCE_RECORD")" = "$REPO" ] \
+  && [ "$(sed -n '2p' "$SOURCE_RECORD")" = "$REV" ]; then
+  source_matches=1
+fi
+if [ "$missing" -eq 0 ] && [ "$source_matches" -eq 1 ]; then
   echo "[fetch-model] $CLASSIFIER already present in $TARGET, skipping download"
   exit 0
+fi
+if [ "$missing" -eq 0 ]; then
+  echo "[fetch-model] $CLASSIFIER files do not match the configured source, refreshing"
 fi
 
 mkdir -p "$TARGET"
@@ -98,4 +107,5 @@ PY
 for f in "${FILES[@]}"; do
   [ -s "$TARGET/$f" ] || { echo "[fetch-model] FAIL: $TARGET/$f missing or zero-size" >&2; exit 1; }
 done
+printf '%s\n%s\n' "$REPO" "$REV" > "$SOURCE_RECORD"
 echo "[fetch-model] OK: $CLASSIFIER ($REPO@${REV:0:12}) present in $TARGET"

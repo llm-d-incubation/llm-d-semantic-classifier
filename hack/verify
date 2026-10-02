@@ -7,6 +7,7 @@ if [ -f Cargo.toml ]; then
   cargo clippy --workspace --all-targets --all-features -- -D warnings
   cargo build --workspace --locked
   cargo test --workspace --all-features --locked
+  ./tests/fetch_model.sh
 else
   echo "[verify] scaffolding phase — validating repo invariants instead"
   test -f AGENTS.md && test -f CONTRIBUTING.md && test -d specs/TEMPLATE
