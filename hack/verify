@@ -2,6 +2,7 @@
 # The local gate: format, lint, types, impacted tests. Must be GREEN before review.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+./tests/fetch_model_metadata.sh
 if [ -f Cargo.toml ]; then
   cargo fmt --check
   cargo clippy --workspace --all-targets --all-features -- -D warnings
