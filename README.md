@@ -265,6 +265,12 @@ Deployment manifests live in [`deploy/`](deploy/). The container build
 ([`Containerfile`](Containerfile)) ships **no model**. The classifier arrives as
 a separate OCI artifact.
 
+The server handles SIGTERM and Ctrl-C with graceful shutdown. It stops readiness
+and new inference admission, then drains accepted requests and worker threads.
+`LLM_D_SC_SHUTDOWN_GRACE_SECS` sets the drain limit (default: 25 seconds); keep
+it below the Pod's `terminationGracePeriodSeconds` so Kubernetes leaves time
+for process exit.
+
 ## Architecture
 
 ```text

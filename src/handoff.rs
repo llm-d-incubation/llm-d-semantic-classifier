@@ -8,12 +8,13 @@
 //! configured bound. Queue wait is recorded through the existing [`Metrics`]
 //! Queue stage.
 //!
-//! Deliberately NOT implemented here (0.20 per VERSIONS.md / ADR-0002): per-job
-//! deadlines, queued-request cancellation, load shedding policy, graceful drain,
-//! and worker-failure isolation.
+//! Queued-request deadlines/cancellation and graceful drain are handled at the
+//! handoff boundary. Load shedding policy and worker-failure isolation remain
+//! separate concerns.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 
@@ -37,9 +38,91 @@ struct InferenceJob {
     _permit: OwnedSemaphorePermit,
 }
 
-/// Queue admission was rejected because the bounded handoff is at capacity.
+/// Why a classify request could not be admitted to the inference executor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct QueueFull;
+pub enum QueueAdmissionError {
+    /// The bounded handoff is at capacity.
+    Full,
+    /// The executor has begun shutting down and no longer accepts work.
+    ShuttingDown,
+}
+
+struct ExecutorLifecycle {
+    accepting: AtomicBool,
+    sender: std::sync::Mutex<Option<mpsc::Sender<InferenceJob>>>,
+    threads: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>,
+}
+
+/// Cloneable control handle used to stop admission and join the executor during
+/// graceful server shutdown.
+#[derive(Clone)]
+pub struct ExecutorShutdownHandle {
+    lifecycle: Arc<ExecutorLifecycle>,
+}
+
+impl ExecutorShutdownHandle {
+    /// Reject future inference work. Any enqueue already holding the sender lock
+    /// completes before this method returns and is included in the drain.
+    pub fn stop_admission(&self) {
+        self.lifecycle.accepting.store(false, Ordering::Release);
+        // Synchronize with an enqueue that passed the first atomic check before
+        // shutdown began. It either sends before this lock is acquired or sees
+        // `accepting == false` and is rejected.
+        drop(
+            self.lifecycle
+                .sender
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+    }
+
+    /// Close the handoff, drain accepted jobs, and join workers within `timeout`.
+    /// Returns false if one or more forwards are still running when the timeout
+    /// expires; their JoinHandles are retained so a later call can join them.
+    pub fn drain_and_join(&self, timeout: Duration) -> bool {
+        self.stop_admission();
+
+        // Closing the final sender lets workers finish queued work and then
+        // leave `blocking_recv`. The channel is FIFO, so accepted jobs drain
+        // before workers exit.
+        self.lifecycle
+            .sender
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+
+        let deadline = Instant::now().checked_add(timeout);
+        loop {
+            let all_finished = self
+                .lifecycle
+                .threads
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .all(std::thread::JoinHandle::is_finished);
+
+            if all_finished {
+                let threads = std::mem::take(
+                    &mut *self
+                        .lifecycle
+                        .threads
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                );
+                let mut joined = true;
+                for thread in threads {
+                    joined &= thread.join().is_ok();
+                }
+                return joined;
+            }
+
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
 
 /// Environment variable overriding the executor worker width.
 pub const WORKERS_ENV: &str = "LLM_D_SC_INFERENCE_WORKERS";
@@ -80,10 +163,10 @@ pub fn default_worker_width() -> usize {
 /// A bounded channel (the handoff) sits between the gRPC handler and a dedicated
 /// executor thread that runs the model forward off Tokio network workers.
 /// Admission beyond the configured `bound` is rejected explicitly
-/// ([`QueueFull`] -> tonic resource-exhausted), and the total of in-flight +
+/// ([`QueueAdmissionError::Full`] -> tonic resource-exhausted), and the total of in-flight +
 /// queued work never exceeds `bound`.
 pub struct InferenceExecutor<R> {
-    sender: mpsc::Sender<InferenceJob>,
+    lifecycle: Arc<ExecutorLifecycle>,
     /// The configured bound on total admitted (in-flight + queued) work.
     bound: usize,
     /// Permits limit total admitted (in-flight + queued) work to `bound`.
@@ -96,8 +179,6 @@ pub struct InferenceExecutor<R> {
     service: Arc<R>,
     /// Number of executor threads performing forwards in parallel.
     workers: usize,
-    /// The dedicated executor threads (held so they live as long as the service).
-    _threads: Vec<std::thread::JoinHandle<()>>,
     _service: std::marker::PhantomData<Arc<R>>,
 }
 
@@ -196,15 +277,20 @@ impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
             })
             .collect();
 
+        let lifecycle = Arc::new(ExecutorLifecycle {
+            accepting: AtomicBool::new(true),
+            sender: std::sync::Mutex::new(Some(tx)),
+            threads: std::sync::Mutex::new(threads),
+        });
+
         Self {
-            sender: tx,
+            lifecycle,
             bound,
             permits,
             current,
             max,
             service,
             workers,
-            _threads: threads,
             _service: std::marker::PhantomData,
         }
     }
@@ -223,14 +309,23 @@ impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
         self.service.metadata()
     }
 
+    /// Return a cloneable handle for server shutdown coordination.
+    pub fn shutdown_handle(&self) -> ExecutorShutdownHandle {
+        ExecutorShutdownHandle {
+            lifecycle: self.lifecycle.clone(),
+        }
+    }
+
     /// Try to admit a classify job. At/over the bound, admission is rejected
-    /// with [`QueueFull`] (the gRPC handler maps it to resource-exhausted).
+    /// with [`QueueAdmissionError::Full`]. During shutdown, it is rejected with
+    /// [`QueueAdmissionError::ShuttingDown`].
     ///
     /// On success returns a oneshot receiver yielding the forward result.
     pub fn try_enqueue(
         &self,
         input: ClassificationInput,
-    ) -> Result<oneshot::Receiver<Result<ClassificationResult, ClassifyError>>, QueueFull> {
+    ) -> Result<oneshot::Receiver<Result<ClassificationResult, ClassifyError>>, QueueAdmissionError>
+    {
         self.try_enqueue_with_deadline(input, None)
     }
 
@@ -239,15 +334,22 @@ impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
         &self,
         input: ClassificationInput,
         deadline: Option<std::time::Instant>,
-    ) -> Result<oneshot::Receiver<Result<ClassificationResult, ClassifyError>>, QueueFull> {
+    ) -> Result<oneshot::Receiver<Result<ClassificationResult, ClassifyError>>, QueueAdmissionError>
+    {
+        if !self.lifecycle.accepting.load(Ordering::Acquire) {
+            return Err(QueueAdmissionError::ShuttingDown);
+        }
+
         let (respond_tx, respond_rx) = oneshot::channel();
         // Acquire a permit for the total (in-flight + queued) bound; a full
         // bound rejects admission explicitly.
-        let permit = self
-            .permits
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| QueueFull)?;
+        let permit = self.permits.clone().try_acquire_owned().map_err(|_| {
+            if self.lifecycle.accepting.load(Ordering::Acquire) {
+                QueueAdmissionError::Full
+            } else {
+                QueueAdmissionError::ShuttingDown
+            }
+        })?;
         // Track the admitted count BEFORE the job is visible to the executor
         // thread. If this increment ran after `try_send`, the executor could
         // already have received the job and decremented (`fetch_sub`) before the
@@ -266,9 +368,26 @@ impl<R: ClassifierRuntime + Send + Sync + 'static> InferenceExecutor<R> {
         // The bounded channel handoff; a full channel rejects admission. On
         // rejection the acquired permit and the admitted count are both released
         // (the job was never admitted).
-        if self.sender.try_send(job).is_err() {
+        let send_result = {
+            let sender = self
+                .lifecycle
+                .sender
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !self.lifecycle.accepting.load(Ordering::Acquire) {
+                Err(QueueAdmissionError::ShuttingDown)
+            } else if let Some(sender) = sender.as_ref() {
+                sender.try_send(job).map_err(|error| match error {
+                    mpsc::error::TrySendError::Full(_) => QueueAdmissionError::Full,
+                    mpsc::error::TrySendError::Closed(_) => QueueAdmissionError::ShuttingDown,
+                })
+            } else {
+                Err(QueueAdmissionError::ShuttingDown)
+            }
+        };
+        if let Err(error) = send_result {
             self.current.fetch_sub(1, Ordering::SeqCst);
-            return Err(QueueFull);
+            return Err(error);
         }
         Ok(respond_rx)
     }

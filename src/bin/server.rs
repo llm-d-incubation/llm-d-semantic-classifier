@@ -13,6 +13,7 @@
 
 use std::env;
 use std::io;
+use std::time::Duration;
 
 use llm_d_sc::classify::load_and_warm_modelcar;
 use llm_d_sc::grpc::classify::ClassifyServer;
@@ -22,6 +23,9 @@ use llm_d_sc::metrics::LatencyStage;
 const DEFAULT_LISTEN: &str = "0.0.0.0:50051";
 /// Default ModelCar mount directory.
 const DEFAULT_MODEL_DIR: &str = "/models";
+/// Leave time for the pod to exit before Kubernetes' default 30-second grace.
+const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(25);
+const SHUTDOWN_GRACE_ENV: &str = "LLM_D_SC_SHUTDOWN_GRACE_SECS";
 
 fn main() -> io::Result<()> {
     let listen = env::var("LLM_D_SC_LISTEN").unwrap_or_else(|_| DEFAULT_LISTEN.to_string());
@@ -103,10 +107,26 @@ fn main() -> io::Result<()> {
         })
         .expect("metrics log thread must spawn");
 
-    // Keep the serving runtime alive for the process lifetime. The
-    // `ClassifyServer` owns the Tokio runtime that serves gRPC; holding it
-    // (and blocking on a channel that never receives) keeps the process up.
-    let (_tx, rx) = std::sync::mpsc::channel::<()>();
-    let _ = rx.recv();
+    // On SIGTERM, mark readiness false, stop new admission, and drain accepted
+    // RPCs and inference work within the pod's termination grace period.
+    let grace = env::var(SHUTDOWN_GRACE_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds <= 3600)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_SHUTDOWN_GRACE);
+    let report = server.wait_for_shutdown_signal(grace)?;
+    if report.completed() {
+        eprintln!("llm-d-sc: graceful shutdown completed");
+    } else {
+        eprintln!(
+            "llm-d-sc: shutdown grace expired before all work drained (server_stopped={}, workers_joined={})",
+            report.server_stopped, report.workers_joined
+        );
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "shutdown grace expired before all work drained",
+        ));
+    }
     Ok(())
 }
