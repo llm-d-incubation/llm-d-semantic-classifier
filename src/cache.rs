@@ -36,11 +36,66 @@ pub mod redis_codec;
 #[cfg(feature = "redis-semantic")]
 pub mod response;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroUsize;
+use std::str::FromStr;
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::classify::{ClassificationResult, ClassifyError, Embedding};
+
+/// The bounded exact-result cache's eviction policy.
+///
+/// FIFO remains the default so existing constructors and configurations keep
+/// their current behavior and hit-path cost. LRU is an explicit opt-in for
+/// workloads whose recently accessed entries are likely to be reused.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CacheEvictionPolicy {
+    /// Evict the oldest inserted entry, without updating order on a hit.
+    #[default]
+    Fifo,
+    /// Evict the entry that has gone unaccessed for the longest time.
+    Lru,
+}
+
+impl FromStr for CacheEvictionPolicy {
+    type Err = ParseCacheEvictionPolicyError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "fifo" => Ok(Self::Fifo),
+            "lru" => Ok(Self::Lru),
+            _ => Err(ParseCacheEvictionPolicyError(value.to_string())),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for CacheEvictionPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// An explicit cache eviction policy was not one of the supported values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseCacheEvictionPolicyError(String);
+
+impl fmt::Display for ParseCacheEvictionPolicyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "unsupported cache eviction policy '{}'; expected 'fifo' or 'lru'",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for ParseCacheEvictionPolicyError {}
 
 /// The path a request took through the cache pipeline.
 ///
@@ -162,18 +217,20 @@ impl Hash for CacheKey {
 /// request path, and an unbounded map there is a memory leak with a delay fuse.
 pub const DEFAULT_CAPACITY: usize = 50_000;
 
+enum CacheEntries {
+    /// The existing low-overhead default: a map plus insertion-order queue.
+    Fifo {
+        entries: HashMap<CacheKey, ClassificationResult>,
+        order: VecDeque<CacheKey>,
+    },
+    /// Opt-in recency-aware storage. `LruCache` keeps both entries and its
+    /// linked recency metadata bounded by the configured capacity.
+    Lru(lru::LruCache<CacheKey, ClassificationResult>),
+}
+
 pub struct ExactCache {
-    entries: HashMap<CacheKey, ClassificationResult>,
-    /// Insertion order, used to evict the oldest entry at capacity.
-    ///
-    /// Deliberately FIFO rather than LRU. FIFO bounds memory, which is the
-    /// actual defect, and costs one push and one pop per insert. LRU would
-    /// retain hot keys better but needs recency bookkeeping on every HIT, and a
-    /// hit is currently 632 nanoseconds, so that bookkeeping is a real fraction
-    /// of it. If eviction policy ever shows up in a measurement, the answer is
-    /// the cache library the architecture already selected, not a hand-rolled
-    /// LRU here.
-    order: std::collections::VecDeque<CacheKey>,
+    entries: CacheEntries,
+    policy: CacheEvictionPolicy,
     capacity: usize,
     forward_count: u64,
     hit_count: u64,
@@ -183,15 +240,35 @@ pub struct ExactCache {
 impl ExactCache {
     /// An empty cache with no entries.
     pub fn new() -> Self {
-        Self::with_capacity(DEFAULT_CAPACITY)
+        Self::with_capacity_and_policy(DEFAULT_CAPACITY, CacheEvictionPolicy::Fifo)
     }
 
-    /// An empty cache holding at most `capacity` entries.
+    /// An empty cache using `policy` and the default capacity.
+    pub fn with_policy(policy: CacheEvictionPolicy) -> Self {
+        Self::with_capacity_and_policy(DEFAULT_CAPACITY, policy)
+    }
+
+    /// An empty FIFO cache holding at most `capacity` entries.
     pub fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity_and_policy(capacity, CacheEvictionPolicy::Fifo)
+    }
+
+    /// An empty cache holding at most `capacity` entries under `policy`.
+    pub fn with_capacity_and_policy(capacity: usize, policy: CacheEvictionPolicy) -> Self {
+        let capacity = capacity.max(1);
+        let entries = match policy {
+            CacheEvictionPolicy::Fifo => CacheEntries::Fifo {
+                entries: HashMap::new(),
+                order: VecDeque::new(),
+            },
+            CacheEvictionPolicy::Lru => CacheEntries::Lru(lru::LruCache::new(
+                NonZeroUsize::new(capacity).expect("cache capacity was clamped to at least one"),
+            )),
+        };
         ExactCache {
-            entries: HashMap::new(),
-            order: std::collections::VecDeque::new(),
-            capacity: capacity.max(1),
+            entries,
+            policy,
+            capacity,
             forward_count: 0,
             hit_count: 0,
             evicted_count: 0,
@@ -200,24 +277,37 @@ impl ExactCache {
 
     /// Store a result, evicting the oldest entry if the cache is at capacity.
     fn store(&mut self, key: CacheKey, result: ClassificationResult) {
-        // Re-storing an existing key must not consume a second slot, and must
-        // not touch the eviction order. The entry API does the lookup once.
-        if let Some(existing) = self.entries.get_mut(&key) {
-            *existing = result;
-            return;
-        }
-        while self.entries.len() >= self.capacity {
-            match self.order.pop_front() {
-                Some(oldest) => {
-                    if self.entries.remove(&oldest).is_some() {
-                        self.evicted_count += 1;
+        match &mut self.entries {
+            CacheEntries::Fifo { entries, order } => {
+                // Re-storing an existing key must not consume a second slot,
+                // and FIFO must not touch insertion order.
+                if let Some(existing) = entries.get_mut(&key) {
+                    *existing = result;
+                    return;
+                }
+                while entries.len() >= self.capacity {
+                    match order.pop_front() {
+                        Some(oldest) => {
+                            if entries.remove(&oldest).is_some() {
+                                self.evicted_count += 1;
+                            }
+                        }
+                        None => break,
                     }
                 }
-                None => break,
+                order.push_back(key.clone());
+                entries.insert(key, result);
+            }
+            CacheEntries::Lru(entries) => {
+                // `put` refreshes an existing key without consuming a slot.
+                // For a new key, `push` returns the capacity eviction, if any.
+                if entries.peek(&key).is_some() {
+                    entries.put(key, result);
+                } else if entries.push(key, result).is_some() {
+                    self.evicted_count += 1;
+                }
             }
         }
-        self.order.push_back(key.clone());
-        self.entries.insert(key, result);
     }
 
     /// Number of entries evicted to stay within capacity.
@@ -227,12 +317,20 @@ impl ExactCache {
 
     /// Current number of cached entries.
     pub fn len(&self) -> usize {
-        self.entries.len()
+        match &self.entries {
+            CacheEntries::Fifo { entries, .. } => entries.len(),
+            CacheEntries::Lru(entries) => entries.len(),
+        }
     }
 
     /// True when the cache holds no entries.
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.len() == 0
+    }
+
+    /// The eviction policy selected when this cache was constructed.
+    pub fn policy(&self) -> CacheEvictionPolicy {
+        self.policy
     }
 
     /// Classify `key`.
@@ -247,9 +345,9 @@ impl ExactCache {
         forward: impl FnOnce() -> Result<ClassificationResult, ClassifyError>,
     ) -> Result<ClassificationResult, ClassifyError> {
         // AC-006: a cache HIT must bypass the tokenizer and model forward.
-        if let Some(cached) = self.entries.get(&key) {
+        if let Some(cached) = self.cached_value(&key) {
             self.hit_count += 1;
-            return Ok(cached.clone());
+            return Ok(cached);
         }
         // Miss: run the forward exactly once, store, and return.
         let result = forward();
@@ -279,8 +377,11 @@ impl ExactCache {
 
     /// Read a cached result without recording a hit or running a forward.
     /// Used by the concurrent `SharedCache` fast path (AC-007).
-    pub(crate) fn cached_value(&self, key: &CacheKey) -> Option<ClassificationResult> {
-        self.entries.get(key).cloned()
+    pub(crate) fn cached_value(&mut self, key: &CacheKey) -> Option<ClassificationResult> {
+        match &mut self.entries {
+            CacheEntries::Fifo { entries, .. } => entries.get(key).cloned(),
+            CacheEntries::Lru(entries) => entries.get(key).cloned(),
+        }
     }
 
     /// Record a forward and store its freshly-computed successful result.
@@ -324,12 +425,32 @@ struct InFlight {
 }
 
 impl SharedCache {
-    /// An empty shared cache.
+    /// An empty shared FIFO cache.
     pub fn new() -> Self {
+        Self::with_policy(CacheEvictionPolicy::Fifo)
+    }
+
+    /// An empty shared cache using `policy` and the default capacity.
+    pub fn with_policy(policy: CacheEvictionPolicy) -> Self {
+        Self::with_capacity_and_policy(DEFAULT_CAPACITY, policy)
+    }
+
+    /// An empty shared cache using `policy` and holding at most `capacity`
+    /// stored results. In-flight work is tracked separately and remains under
+    /// the existing single-flight contract.
+    pub fn with_capacity_and_policy(capacity: usize, policy: CacheEvictionPolicy) -> Self {
         SharedCache {
-            inner: Arc::new(Mutex::new(ExactCache::new())),
+            inner: Arc::new(Mutex::new(ExactCache::with_capacity_and_policy(
+                capacity, policy,
+            ))),
             in_flight: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// The stored-entry eviction policy. Single-flight behavior is independent
+    /// of this setting.
+    pub fn policy(&self) -> CacheEvictionPolicy {
+        self.inner.lock().unwrap().policy()
     }
 
     /// Classify `key` concurrently, returning the classification result and
@@ -349,7 +470,7 @@ impl SharedCache {
     ) -> (Result<ClassificationResult, ClassifyError>, CachePath) {
         // Fast path: serve an already-cached result.
         {
-            let inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().unwrap();
             if let Some(cached) = inner.cached_value(&key) {
                 return (Ok(cached), CachePath::Hit);
             }
@@ -398,6 +519,21 @@ impl SharedCache {
     /// Number of times the tokenizer/model forward was invoked (all threads).
     pub fn forward_count(&self) -> u64 {
         self.inner.lock().unwrap().forward_count()
+    }
+
+    /// Number of stored results. In-flight work is not part of this bound.
+    pub fn len(&self) -> usize {
+        self.inner.lock().unwrap().len()
+    }
+
+    /// True when no completed classification result is cached.
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().unwrap().is_empty()
+    }
+
+    /// Number of stored results evicted to preserve the configured capacity.
+    pub fn evicted_count(&self) -> u64 {
+        self.inner.lock().unwrap().evicted_count()
     }
 }
 
@@ -461,6 +597,8 @@ pub fn identity_tag(id: (&str, &str, &str, &str, Option<&str>)) -> String {
 #[cfg(test)]
 mod bounded_tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     fn result(id: &str) -> ClassificationResult {
         ClassificationResult {
@@ -476,30 +614,35 @@ mod bounded_tests {
         }
     }
 
-    /// U-120: the cache must not grow without bound.
+    /// U-046: neither policy may grow beyond its configured capacity.
     ///
     /// This is the defect that does not show up in any functional test: an
     /// unbounded map serves correct results forever and simply consumes the
     /// process. Asserting on the entry count is the only way to see it.
     #[test]
-    fn u120_cache_respects_its_capacity() {
-        let mut cache = ExactCache::with_capacity(16);
-        for i in 0..500 {
-            let key = CacheKey::new("c", "m", "t", "x", &format!("distinct input {i}"));
-            cache.classify(key, || Ok(result("a"))).unwrap();
+    fn u046_cache_respects_its_capacity_under_both_policies() {
+        for policy in [CacheEvictionPolicy::Fifo, CacheEvictionPolicy::Lru] {
+            let mut cache = ExactCache::with_capacity_and_policy(16, policy);
+            for i in 0..500 {
+                let key = CacheKey::new("c", "m", "t", "x", &format!("distinct input {i}"));
+                cache.classify(key, || Ok(result("a"))).unwrap();
+            }
+            assert!(
+                cache.len() <= 16,
+                "{policy:?} cache holds {} entries with a capacity of 16",
+                cache.len()
+            );
+            assert!(
+                cache.evicted_count() > 0,
+                "{policy:?} eviction must have occurred"
+            );
         }
-        assert!(
-            cache.len() <= 16,
-            "cache holds {} entries with a capacity of 16",
-            cache.len()
-        );
-        assert!(cache.evicted_count() > 0, "eviction must have occurred");
     }
 
-    /// U-121: eviction removes the OLDEST entry, and a re-stored key does not
-    /// consume a second slot.
+    /// U-046: FIFO removes the oldest inserted entry, and a re-stored key does
+    /// not consume a second slot.
     #[test]
-    fn u121_eviction_is_oldest_first_and_does_not_double_count() {
+    fn u046_fifo_eviction_is_oldest_first_and_does_not_double_count() {
         let mut cache = ExactCache::with_capacity(2);
         let k = |n: &str| CacheKey::new("c", "m", "t", "x", n);
 
@@ -524,11 +667,87 @@ mod bounded_tests {
             .unwrap();
         assert!(forwarded, "the oldest entry must have been evicted");
     }
+
+    #[test]
+    fn u046_lru_evicts_the_least_recently_used_entry() {
+        let mut cache = ExactCache::with_capacity_and_policy(2, CacheEvictionPolicy::Lru);
+        let k = |n: &str| CacheKey::new("c", "m", "t", "x", n);
+
+        cache.classify(k("first"), || Ok(result("a"))).unwrap();
+        cache.classify(k("second"), || Ok(result("b"))).unwrap();
+        cache
+            .classify(k("first"), || panic!("must be a hit"))
+            .unwrap();
+        cache.classify(k("third"), || Ok(result("c"))).unwrap();
+
+        let forwards = cache.forward_count();
+        cache
+            .classify(k("first"), || panic!("recently used entry must remain"))
+            .unwrap();
+        assert_eq!(cache.forward_count(), forwards);
+
+        let mut second_forwarded = false;
+        cache
+            .classify(k("second"), || {
+                second_forwarded = true;
+                Ok(result("b"))
+            })
+            .unwrap();
+        assert!(
+            second_forwarded,
+            "least recently used entry must be evicted"
+        );
+    }
+
+    #[test]
+    fn u007_existing_constructors_default_to_fifo() {
+        assert_eq!(ExactCache::new().policy(), CacheEvictionPolicy::Fifo);
+        assert_eq!(
+            ExactCache::with_capacity(2).policy(),
+            CacheEvictionPolicy::Fifo
+        );
+        assert_eq!(SharedCache::new().policy(), CacheEvictionPolicy::Fifo);
+        assert_eq!(CacheEvictionPolicy::default(), CacheEvictionPolicy::Fifo);
+    }
+
+    #[test]
+    fn u046_shared_cache_stays_bounded_during_concurrent_eviction() {
+        const CAPACITY: usize = 4;
+        const CALLERS: usize = 64;
+
+        for policy in [CacheEvictionPolicy::Fifo, CacheEvictionPolicy::Lru] {
+            let cache = Arc::new(SharedCache::with_capacity_and_policy(CAPACITY, policy));
+            let barrier = Arc::new(Barrier::new(CALLERS));
+            let handles: Vec<_> = (0..CALLERS)
+                .map(|index| {
+                    let cache = Arc::clone(&cache);
+                    let barrier = Arc::clone(&barrier);
+                    thread::spawn(move || {
+                        barrier.wait();
+                        let key = CacheKey::new(
+                            "classifier",
+                            "model",
+                            "tokenizer",
+                            "taxonomy",
+                            &format!("distinct-{index}"),
+                        );
+                        cache.classify_concurrent(key, || Ok(result("value")))
+                    })
+                })
+                .collect();
+
+            for handle in handles {
+                handle.join().unwrap().0.unwrap();
+            }
+            assert!(cache.len() <= CAPACITY, "{policy:?} exceeded capacity");
+            assert!(cache.evicted_count() > 0, "{policy:?} did not evict");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheKey, CachePath, ExactCache, SharedCache};
+    use super::{CacheEvictionPolicy, CacheKey, CachePath, ExactCache, SharedCache};
     use crate::classify::{ClassificationResult, ClassifyError, ClassifyStatus, RankedSignal};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -595,6 +814,28 @@ mod tests {
             1,
             "the second identical call must be counted as a cache hit"
         );
+    }
+
+    #[test]
+    fn u046_failed_forwards_are_not_cached_under_either_policy() {
+        for policy in [CacheEvictionPolicy::Fifo, CacheEvictionPolicy::Lru] {
+            let mut cache = ExactCache::with_capacity_and_policy(2, policy);
+            let key = CacheKey::new("clf", "model", "tokenizer", "taxonomy", "input");
+
+            let first = cache.classify(key.clone(), || {
+                Err(ClassifyError::Unavailable("failed".into()))
+            });
+            assert!(first.is_err());
+
+            let mut retried = false;
+            cache
+                .classify(key, || {
+                    retried = true;
+                    Ok(result("recovered"))
+                })
+                .unwrap();
+            assert!(retried, "{policy:?} must not cache a failed forward");
+        }
     }
 
     #[test]
@@ -690,69 +931,58 @@ mod tests {
         // tokenizer/model forward (bounded), and every caller must receive the
         // same result.
         const CONCURRENCY: usize = 8;
-        let cache = Arc::new(SharedCache::new());
-        let key = CacheKey::new(
-            "clf",
-            "model-rev",
-            "tok-rev",
-            "tax-rev",
-            "same sensitivity input",
-        );
+        for policy in [CacheEvictionPolicy::Fifo, CacheEvictionPolicy::Lru] {
+            let cache = Arc::new(SharedCache::with_policy(policy));
+            let key = CacheKey::new(
+                "clf",
+                "model-rev",
+                "tok-rev",
+                "tax-rev",
+                "same sensitivity input",
+            );
 
-        // A barrier synchronizes all N threads so they reach `classify_concurrent`
-        // together as concurrent misses. The barrier is OUTSIDE the forward
-        // closure: a correct single-flight cache runs the forward on exactly one
-        // thread, so an N-way barrier INSIDE the forward would deadlock (only one
-        // thread ever arrives). To still guarantee the misses genuinely overlap, the
-        // forward closure holds the forward stage open for a generous duration, so
-        // every concurrent miss enters the forward stage before the first one
-        // completes and stores (forcing N redundant forwards on the buggy cache).
-        let barrier = Arc::new(Barrier::new(CONCURRENCY));
-        let mut handles = Vec::new();
-        for _ in 0..CONCURRENCY {
-            let cache = Arc::clone(&cache);
-            let key = key.clone();
-            let barrier = Arc::clone(&barrier);
-            handles.push(thread::spawn(move || {
-                barrier.wait();
-                cache.classify_concurrent(key, || {
-                    // Hold the forward stage open so concurrent misses overlap.
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                    Ok(result("sensitivity"))
-                })
-            }));
-        }
+            // A barrier synchronizes all N threads so they reach
+            // `classify_concurrent` together as concurrent misses.
+            let barrier = Arc::new(Barrier::new(CONCURRENCY));
+            let mut handles = Vec::new();
+            for _ in 0..CONCURRENCY {
+                let cache = Arc::clone(&cache);
+                let key = key.clone();
+                let barrier = Arc::clone(&barrier);
+                handles.push(thread::spawn(move || {
+                    barrier.wait();
+                    cache.classify_concurrent(key, || {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        Ok(result("sensitivity"))
+                    })
+                }));
+            }
 
-        let results: Vec<(Result<ClassificationResult, ClassifyError>, CachePath)> =
-            handles.into_iter().map(|h| h.join().unwrap()).collect();
+            let results: Vec<(Result<ClassificationResult, ClassifyError>, CachePath)> =
+                handles.into_iter().map(|h| h.join().unwrap()).collect();
 
-        assert_eq!(
-            cache.forward_count(),
-            1,
-            "identical concurrent misses must coalesce into ONE forward, not {}",
-            CONCURRENCY
-        );
-        assert!(
-            results
+            assert_eq!(
+                cache.forward_count(),
+                1,
+                "{policy:?} identical concurrent misses must coalesce into one forward"
+            );
+            assert!(
+                results.iter().all(|r| matches!(
+                    &r.0,
+                    Ok(c) if c.ranked.first().map(|s| s.id.as_str()) == Some("sensitivity")
+                )),
+                "every concurrent caller must receive the same classification result"
+            );
+            let misses = results.iter().filter(|r| r.1 == CachePath::Miss).count();
+            let coalesced = results
                 .iter()
-                .all(|r| matches!(&r.0, Ok(c) if c.ranked.first().map(|s| s.id.as_str()) == Some("sensitivity"))),
-            "every concurrent caller must receive the same classification result"
-        );
-        // Exactly one caller should be the designated forwarder (Miss), the
-        // rest waited for its result (Coalesced). None are Hits (cold cache).
-        let misses = results.iter().filter(|r| r.1 == CachePath::Miss).count();
-        let coalesced = results
-            .iter()
-            .filter(|r| r.1 == CachePath::Coalesced)
-            .count();
-        let hits = results.iter().filter(|r| r.1 == CachePath::Hit).count();
-        assert_eq!(misses, 1, "exactly one designated forwarder");
-        assert_eq!(
-            coalesced,
-            CONCURRENCY - 1,
-            "all other callers must be coalesced waits"
-        );
-        assert_eq!(hits, 0, "no true cache hits on a cold cache");
+                .filter(|r| r.1 == CachePath::Coalesced)
+                .count();
+            let hits = results.iter().filter(|r| r.1 == CachePath::Hit).count();
+            assert_eq!(misses, 1, "exactly one designated forwarder");
+            assert_eq!(coalesced, CONCURRENCY - 1);
+            assert_eq!(hits, 0, "no true cache hits on a cold cache");
+        }
     }
 }
 

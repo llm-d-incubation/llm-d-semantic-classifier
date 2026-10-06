@@ -142,6 +142,11 @@ never routes traffic to a cold instance.
 to your own definition, and the model directory must match the classifier it was
 calibrated against. See [docs/classifiers.md](docs/classifiers.md).
 
+The exact-result cache uses bounded FIFO eviction by default. Set
+`LLM_D_SC_CACHE_EVICTION=lru` to opt into least-recently-used eviction for a
+workload with a reusable hot set. The only accepted values are `fifo` and `lru`;
+an invalid explicit value prevents startup rather than silently changing policy.
+
 Scores are cosine similarities against labelled anchors, not probabilities. They
 are comparable WITHIN one response, which is what makes the margin between the
 top two labels meaningful, but they are not calibrated across models or

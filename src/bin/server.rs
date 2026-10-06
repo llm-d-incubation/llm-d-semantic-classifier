@@ -14,6 +14,7 @@
 use std::env;
 use std::io;
 
+use llm_d_sc::cache::CacheEvictionPolicy;
 use llm_d_sc::classify::load_and_warm_modelcar;
 use llm_d_sc::grpc::classify::ClassifyServer;
 use llm_d_sc::metrics::LatencyStage;
@@ -22,6 +23,20 @@ use llm_d_sc::metrics::LatencyStage;
 const DEFAULT_LISTEN: &str = "0.0.0.0:50051";
 /// Default ModelCar mount directory.
 const DEFAULT_MODEL_DIR: &str = "/models";
+/// Optional exact-result cache eviction policy. FIFO is the compatible default.
+const CACHE_EVICTION_ENV: &str = "LLM_D_SC_CACHE_EVICTION";
+
+fn parse_cache_policy(value: Option<&str>) -> io::Result<CacheEvictionPolicy> {
+    match value {
+        Some(value) => value.parse().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{CACHE_EVICTION_ENV}: {error}"),
+            )
+        }),
+        None => Ok(CacheEvictionPolicy::default()),
+    }
+}
 
 fn main() -> io::Result<()> {
     let listen = env::var("LLM_D_SC_LISTEN").unwrap_or_else(|_| DEFAULT_LISTEN.to_string());
@@ -33,6 +48,16 @@ fn main() -> io::Result<()> {
             "LLM_D_SC_MODEL_DIR must not be empty",
         ));
     }
+    let cache_policy = match env::var(CACHE_EVICTION_ENV) {
+        Ok(value) => parse_cache_policy(Some(&value))?,
+        Err(env::VarError::NotPresent) => parse_cache_policy(None)?,
+        Err(env::VarError::NotUnicode(_)) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{CACHE_EVICTION_ENV} must be valid Unicode"),
+            ));
+        }
+    };
 
     // Real model lifecycle: validate the ModelCar required-files layout, load
     // tokenizer + config + safetensors, build the Candle classifier, and run a
@@ -47,9 +72,10 @@ fn main() -> io::Result<()> {
     })?;
 
     // Only a loaded+warmed classifier reaches here, so the server reports READY.
-    let server = ClassifyServer::bind_with_classifier(&listen, classifier)?;
+    let server =
+        ClassifyServer::bind_with_classifier_and_cache_policy(&listen, classifier, cache_policy)?;
     eprintln!(
-        "llm-d-sc: bound {listen} -> {}; ModelCar dir {model_dir}; READY (resident Candle classifier loaded and warmed)",
+        "llm-d-sc: bound {listen} -> {}; ModelCar dir {model_dir}; cache eviction {cache_policy:?}; READY (resident Candle classifier loaded and warmed)",
         server.local_addr()
     );
 
@@ -109,4 +135,35 @@ fn main() -> io::Result<()> {
     let (_tx, rx) = std::sync::mpsc::channel::<()>();
     let _ = rx.recv();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn u007_omitted_cache_policy_defaults_to_fifo() {
+        assert_eq!(parse_cache_policy(None).unwrap(), CacheEvictionPolicy::Fifo);
+    }
+
+    #[test]
+    fn u007_explicit_cache_policies_parse() {
+        assert_eq!(
+            parse_cache_policy(Some("fifo")).unwrap(),
+            CacheEvictionPolicy::Fifo
+        );
+        assert_eq!(
+            parse_cache_policy(Some("lru")).unwrap(),
+            CacheEvictionPolicy::Lru
+        );
+    }
+
+    #[test]
+    fn u007_invalid_cache_policy_is_actionable() {
+        let error = parse_cache_policy(Some("random")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let message = error.to_string();
+        assert!(message.contains(CACHE_EVICTION_ENV));
+        assert!(message.contains("expected 'fifo' or 'lru'"));
+    }
 }
