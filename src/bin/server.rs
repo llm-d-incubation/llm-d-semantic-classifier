@@ -16,6 +16,7 @@ use std::io;
 
 use llm_d_sc::classify::load_and_warm_modelcar;
 use llm_d_sc::grpc::classify::ClassifyServer;
+use llm_d_sc::http::{HttpServer, SharedReadiness, DEFAULT_HTTP_LISTEN};
 use llm_d_sc::metrics::LatencyStage;
 
 /// Default TCP listen address.
@@ -51,6 +52,18 @@ fn main() -> io::Result<()> {
     eprintln!(
         "llm-d-sc: bound {listen} -> {}; ModelCar dir {model_dir}; READY (resident Candle classifier loaded and warmed)",
         server.local_addr()
+    );
+
+    // HTTP server for health and metrics endpoints, replacing the tcpSocket
+    // K8s probe workaround on the gRPC port. The classifier is loaded and
+    // warmed at this point, so readiness starts true.
+    let http_listen =
+        env::var("LLM_D_SC_HTTP_LISTEN").unwrap_or_else(|_| DEFAULT_HTTP_LISTEN.to_string());
+    let readiness = SharedReadiness::new(true);
+    let http = HttpServer::spawn(&http_listen, server.metrics(), readiness)?;
+    eprintln!(
+        "llm-d-sc: http server bound {http_listen} -> {}; /healthz, /readyz, /metrics",
+        http.local_addr()
     );
 
     // Periodically log the per-stage latency DECOMPOSITION.
