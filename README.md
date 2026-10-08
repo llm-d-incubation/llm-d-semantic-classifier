@@ -244,6 +244,14 @@ ranked:             [ { label: "SIMPLE",    score:  0.999 },
 Every declared label is ranked, so a caller can read confidence from the margin
 between the top two rather than trusting a single answer.
 
+The server also implements the **standard gRPC Health Checking Protocol**
+(`grpc.health.v1.Health`) on the same port: `Check("")` reports `SERVING` for
+the whole server and `Check("classify.Classify")` for the classify API — a
+status that only exists after the model is loaded and warmed. Kubernetes
+`grpc:` readiness probes, Envoy's gRPC health checker, and grpcurl work
+against it with no bespoke client code; see `deploy/topology-b-clusterip.yaml`
+for a deployed `grpc` readiness probe.
+
 Verification and benchmarking:
 
 ```bash

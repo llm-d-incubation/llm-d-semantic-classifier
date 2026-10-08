@@ -38,7 +38,6 @@ acceptance criterion, every required test ID, and its execution status.
 | Executor width is not auto-tuned | the executor now runs a real worker pool (default 4, `LLM_D_SC_INFERENCE_WORKERS`), but the best width for a given host and quantisation is not discovered automatically | 0.2 |
 | No per-request deadlines or cancellation | a queued request cannot be abandoned when the caller has already given up | 0.2 |
 | No graceful drain | shutdown does not stop admission and drain in-flight work in a defined order | 0.2 |
-| No health-checking endpoint | readiness is internal state; an orchestrator cannot probe it over gRPC or HTTP | 0.3 |
 
 ## Observability
 

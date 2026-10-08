@@ -39,9 +39,13 @@ spec:
           ports: [{containerPort: 50051, name: grpc}]
           volumeMounts: [{name: models, mountPath: /models}]
           # S-006: readiness must block traffic until the model is warm. The
-          # Service only adds the Pod as an endpoint once this passes.
+          # Service only adds the Pod as an endpoint once this passes. The
+          # standard gRPC health protocol (grpc.health.v1) is served on the
+          # same port as classify; the listener only binds — and Check starts
+          # answering SERVING — after load and warmup succeed, so a failed
+          # ModelCar never becomes an endpoint.
           readinessProbe:
-            tcpSocket: {port: 50051}
+            grpc: {port: grpc}
             initialDelaySeconds: 3
             periodSeconds: 2
           resources:

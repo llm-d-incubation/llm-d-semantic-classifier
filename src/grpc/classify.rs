@@ -19,15 +19,15 @@
 //! workers" and keeps the slice minimal: I-001 pins the RPC contract, not the
 //! model. The response never sets `final_route` (AC-010).
 
-use std::collections::HashMap;
-use std::io;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use crate::classify::ClassifyError;
 use crate::handoff::InferenceExecutor;
 use crate::metrics::{Metrics, MetricsSnapshot};
 use crate::telemetry::{RequestEvent, Telemetry, TraceEvent};
+use std::collections::HashMap;
+use std::io;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tonic::transport::Endpoint;
 
 /// Default bound on total admitted (in-flight + queued) inference work.
 ///
@@ -43,6 +43,12 @@ pub mod generated {
 }
 
 pub use generated::{ClassifyRequest, ClassifyResponse};
+
+/// The fully-qualified gRPC service name served by [`ClassifyServiceImpl`]
+/// (proto package `classify`, service `Classify`). The standard health service
+/// ([`crate::grpc::health`]) reports this name's serving status in addition to
+/// the whole-server (empty-name) status.
+pub const SERVICE_NAME: &str = "classify.Classify";
 
 #[derive(Clone, Copy)]
 struct RequestDeadline(Instant);
@@ -80,6 +86,7 @@ fn parse_grpc_timeout(value: &str) -> Option<Duration> {
     }
 }
 
+use crate::grpc::health::HealthService;
 /// The generated tonic (async) service trait.
 pub use generated::classify_server::Classify as ClassifyTrait;
 
@@ -483,6 +490,13 @@ impl ClassifyServer {
         let bound = listener.local_addr()?;
 
         let service = generated::classify_server::ClassifyServer::new(service);
+        // The standard gRPC health service (grpc.health.v1.Health) rides the
+        // SAME listener as classify, so an orchestrator probes ONE port with a
+        // STANDARD protocol (e.g. a Kubernetes `grpc:` readiness probe) instead
+        // of inferring readiness from a bare TCP dial. It fronts the whole
+        // server plus the classify service, reporting the construction-time
+        // readiness: a server only exists after load and warmup succeeded.
+        let health = HealthService::new(readiness, &[SERVICE_NAME]);
         // I-008 evidence: count every ACCEPTED TCP connection. A client that
         // reuses one persistent HTTP/2 channel across N calls produces exactly
         // ONE accept; a client that reconnects per call produces N. Measuring
@@ -516,6 +530,9 @@ impl ClassifyServer {
         );
         let serve = tonic::transport::Server::builder()
             .add_service(service)
+            .add_service(crate::grpc::health::health_server::HealthServer::new(
+                health,
+            ))
             .serve_with_incoming(incoming);
 
         runtime.spawn(serve);
@@ -602,7 +619,7 @@ impl ClassifyClient {
             .build()
             .map_err(io::Error::other)?;
 
-        let endpoint = tonic::transport::Endpoint::from_shared(format!("http://{addr_str}"))
+        let endpoint = Endpoint::from_shared(format!("http://{addr_str}"))
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
             .connect_timeout(std::time::Duration::from_secs(5))
             .tcp_nodelay(true);

@@ -1,0 +1,43 @@
+  // The gRPC Health Checking Protocol (gRPC proposal A14), as standardised by
+// the canonical schema at
+// https://github.com/grpc/grpc-proto/blob/master/grpc/health/v1/health.proto
+//
+// Serving the STANDARD protocol (rather than a bespoke endpoint) is what lets
+// an orchestrator observe readiness without bespoke client code: Kubernetes
+// `grpc:` probes, Envoy's gRPC health checker, and grpcurl all speak this
+// service. The schema is the frozen standard, so it is generated in-repo via
+// the same `tonic-prost-build` pipeline as classify.proto instead of pulling
+// the `tonic-health` crate: the protocol is two RPCs over two messages, and
+// the default build stays dependency-light.
+//
+// Protocol semantics implemented in `src/grpc/health.rs`:
+//   - Check("") queries the WHOLE server; Check("<fully-qualified service
+//     name>") queries one named service this server serves. A service name the
+//     server does not know is an explicit NOT_FOUND error.
+//   - Watch streams the current status first, then one message per status
+//     change; an unknown service name streams SERVICE_UNKNOWN (NOT_FOUND is a
+//     Check-only error).
+
+syntax = "proto3";
+
+package grpc.health.v1;
+
+message HealthCheckRequest {
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    SERVICE_UNKNOWN = 3; // Used only by the Watch method.
+  }
+  ServingStatus status = 1;
+}
+
+service Health {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+
+  rpc Watch(HealthCheckRequest) returns (stream HealthCheckResponse);
+}

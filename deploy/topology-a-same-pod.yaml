@@ -42,8 +42,11 @@ spec:
             - {name: LLM_D_SC_CLASSIFIER, value: complexity}
             - {name: LLM_D_SC_LISTEN, value: "127.0.0.1:50051"}
           volumeMounts: [{name: models, mountPath: /models}]
-          # No HTTP health endpoint exists yet (tracked gap), so readiness is a
-          # TCP check: the listener only binds after load and warmup succeed.
+          # The standard gRPC health protocol (grpc.health.v1) is served on the
+          # same port as classify, but this same-pod topology binds loopback
+          # only (the sidecar gateway is the sole client), so readiness stays a
+          # plain TCP check: the listener only binds after load and warmup
+          # succeed.
           readinessProbe:
             tcpSocket: {port: 50051}
             initialDelaySeconds: 3
