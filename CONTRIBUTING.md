@@ -19,14 +19,25 @@ Commits without a signoff cannot be merged.
 Requires a Rust toolchain and `protoc`.
 
 ```bash
-./hack/verify       # format, lint (-D warnings), build, unit + local tests
+make build          # cargo build --workspace --locked
+make test           # all tests (V=1 for --nocapture)
+make fmt            # format with rustfmt
+make lint           # fmt --check + clippy -D warnings
+make doc            # build docs with warnings denied
+make audit          # cargo deny check
+```
+
+Model- and spec-dependent gates stay in `hack/`:
+
+```bash
 ./hack/test-parity  # fetches the pinned artifact, runs model-dependent tests
 ./hack/test-report  # writes per-test-ID execution results
 ./hack/spec-check 0.1-mvp   # the evidence ledger
 ```
 
-`./hack/verify` must be green before a pull request is ready. `test-parity`
-downloads a pinned model artifact, so it is not run on every push.
+`make verify` (lint + build + tests) must be green before a pull request is
+ready. `test-parity` downloads a pinned model artifact, so it is not run on
+every push.
 
 ## What a good change looks like
 

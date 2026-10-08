@@ -247,7 +247,7 @@ between the top two rather than trusting a single answer.
 Verification and benchmarking:
 
 ```bash
-./hack/verify              # fmt, clippy -D warnings, build, unit + local tests
+make verify               # fmt, clippy -D warnings, build, unit + local tests
 ./hack/test-parity         # model-dependent tests against the pinned artifact
 ./hack/spec-check 0.1-mvp   # evidence ledger: every criterion and test ID
 cargo run --release --bin bench-runner   # latency matrix
@@ -313,7 +313,7 @@ classifiers/         built-in taxonomy definitions (labels and anchors)
 proto/               the gRPC wire contract
 tests/               integration, parity, and benchmark-harness suites
 deploy/              Kubernetes manifests, ModelCar build
-hack/                verify, test-report, test-parity, spec-check, fetch-model,
+hack/                test-report, test-parity, spec-check, fetch-model,
                      deploy-cluster, cluster-evidence, benchmark-report
 docs/                architecture, decisions (ADRs), condensed research,
                      benchmark results and methodology
@@ -385,7 +385,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). In summary:
 
 - commits require a [DCO](https://developercertificate.org/) `Signed-off-by` line
   (`git commit -s`)
-- `./hack/verify` must be green
+- `make verify` must be green
 - behaviour claims need tests; performance claims need comparable p50/p95/p99
   evidence with the measurement conditions recorded
 - existing test assertions are protected. Weakening one requires an explicit

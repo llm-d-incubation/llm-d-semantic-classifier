@@ -17,5 +17,5 @@ jobs:
             rustup toolchain install 1.96.0 --profile minimal --component rustfmt,clippy
             sudo apt-get update -q && sudo apt-get install -y -q protobuf-compiler
           fi
-      - run: ./hack/verify
-      - run: ./hack/build
+      - run: make verify
+      - run: make build
