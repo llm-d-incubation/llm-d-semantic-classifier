@@ -15,6 +15,7 @@ pub mod embedding;
 pub mod grpc;
 pub mod handoff;
 pub mod head;
+pub mod http;
 pub mod metrics;
 pub mod modernbert;
 pub mod prefilter;
