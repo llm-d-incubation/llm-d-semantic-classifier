@@ -195,10 +195,12 @@ mod tests {
 
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let mut stream =
-            std::net::TcpStream::connect(addr).expect("must connect to http server");
-        std::io::Write::write_all(&mut stream, b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n")
-            .unwrap();
+        let mut stream = std::net::TcpStream::connect(addr).expect("must connect to http server");
+        std::io::Write::write_all(
+            &mut stream,
+            b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n",
+        )
+        .unwrap();
         let mut buf = [0u8; 1024];
         let n = std::io::Read::read(&mut stream, &mut buf).unwrap();
         let response = std::str::from_utf8(&buf[..n]).unwrap();
@@ -212,8 +214,7 @@ mod tests {
     fn readyz_reflects_readiness() {
         let metrics = Metrics::new();
         let readiness = SharedReadiness::new(false);
-        let server =
-            HttpServer::spawn("127.0.0.1:0", metrics, readiness.clone()).unwrap();
+        let server = HttpServer::spawn("127.0.0.1:0", metrics, readiness.clone()).unwrap();
         let addr = server.local_addr();
 
         std::thread::sleep(std::time::Duration::from_millis(50));
