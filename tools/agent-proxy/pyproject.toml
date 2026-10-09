@@ -1,0 +1,16 @@
+[project]
+name = "llm-d-agent-proxy"
+version = "0.1.0"
+description = "Local semantic-routing proxy for coding-agent traffic"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "grpcio",
+    "grpcio-tools",
+    "httpx",
+    "huggingface-hub",
+    "uvicorn",
+]
+
+[tool.uv]
+package = false

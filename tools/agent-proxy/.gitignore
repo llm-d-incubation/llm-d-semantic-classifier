@@ -1,0 +1,4 @@
+.generated/
+.logs/
+.venv/
+__pycache__/
