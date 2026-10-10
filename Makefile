@@ -10,7 +10,7 @@ endif
 
 .PHONY: all build release check clean \
 	test test-unit \
-	verify lint fmt doc audit \
+	verify lint fmt doc audit metadata-check \
 	playground \
 	help
 
@@ -50,7 +50,7 @@ test-unit:
 # -------------------------------------------------------------------
 
 # The local gate: fmt, lint, build, tests. Must be GREEN before review.
-verify: lint build test
+verify: metadata-check lint build test
 
 lint:
 	cargo fmt --all -- --check
@@ -64,6 +64,9 @@ doc:
 
 audit:
 	cargo deny check
+
+metadata-check:
+	./tests/fetch_model_metadata.sh
 
 # -------------------------------------------------------------------
 # Convenience
@@ -94,7 +97,7 @@ help:
 	@echo "  test      run all tests"
 	@echo ""
 	@echo "Quality:"
-	@echo "  verify    the local gate: fmt + clippy + build + tests"
+	@echo "  verify    the local gate: metadata + fmt + clippy + build + tests"
 	@echo "  lint      rustfmt check + clippy -D warnings"
 	@echo "  fmt       format with rustfmt"
 	@echo "  doc       build docs with warnings denied"
