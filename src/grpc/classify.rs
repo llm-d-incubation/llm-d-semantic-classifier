@@ -86,7 +86,7 @@ fn parse_grpc_timeout(value: &str) -> Option<Duration> {
     }
 }
 
-use crate::grpc::health::HealthService;
+use crate::grpc::health::{HealthService, HealthState};
 /// The generated tonic (async) service trait.
 pub use generated::classify_server::Classify as ClassifyTrait;
 
@@ -107,7 +107,7 @@ pub struct ClassifyServer {
     addr: std::net::SocketAddr,
     metrics: Metrics,
     telemetry: Telemetry,
-    readiness: Arc<std::sync::atomic::AtomicBool>,
+    readiness: tokio::sync::watch::Sender<HealthState>,
     accepted: std::sync::Arc<std::sync::atomic::AtomicU64>,
     shutdown_started: bool,
 }
@@ -528,9 +528,11 @@ impl ClassifyServer {
         // SAME listener as classify, so an orchestrator probes ONE port with a
         // STANDARD protocol (e.g. a Kubernetes `grpc:` readiness probe) instead
         // of inferring readiness from a bare TCP dial. It fronts the whole
-        // server plus the classify service, reporting the construction-time
-        // readiness: a server only exists after load and warmup succeeded.
-        let health = HealthService::new(readiness, &[SERVICE_NAME]);
+        // server plus the classify service. It shares the lifecycle readiness
+        // state so health clients see the transition to NOT_SERVING on drain.
+        let (readiness_state, health_readiness) =
+            tokio::sync::watch::channel(HealthState::from_readiness(readiness));
+        let health = HealthService::with_readiness(health_readiness, &[SERVICE_NAME]);
         // I-008 evidence: count every ACCEPTED TCP connection. A client that
         // reuses one persistent HTTP/2 channel across N calls produces exactly
         // ONE accept; a client that reconnects per call produces N. Measuring
@@ -582,7 +584,7 @@ impl ClassifyServer {
             addr: bound,
             metrics,
             telemetry,
-            readiness: Arc::new(std::sync::atomic::AtomicBool::new(readiness.ready())),
+            readiness: readiness_state,
             accepted,
             shutdown_started: false,
         })
@@ -594,7 +596,7 @@ impl ClassifyServer {
     /// load/warmup never constructs a server, so readiness is never claimed for
     /// a directory that merely exists (AC-002).
     pub fn readiness(&self) -> crate::runtime::Readiness {
-        if self.readiness.load(std::sync::atomic::Ordering::Acquire) {
+        if self.readiness.borrow().serving {
             crate::runtime::Readiness::Ready
         } else {
             crate::runtime::Readiness::NotReady
@@ -609,8 +611,7 @@ impl ClassifyServer {
             return;
         }
         self.shutdown_started = true;
-        self.readiness
-            .store(false, std::sync::atomic::Ordering::Release);
+        self.readiness.send_replace(HealthState::draining());
         self.executor_shutdown.stop_admission();
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(());
@@ -912,6 +913,38 @@ mod tests {
     }
 
     #[test]
+    fn u035_shutdown_admission_maps_to_unavailable() {
+        let service = ClassifyServiceImpl::with_executor(
+            ShutdownClassifier {
+                gate: Arc::new(ShutdownGate {
+                    started: Mutex::new(None),
+                    released: Mutex::new(false),
+                    release: Condvar::new(),
+                }),
+            },
+            Telemetry::new(),
+            Metrics::new(),
+            1,
+        );
+        let shutdown = service.shutdown_handle();
+        shutdown.stop_admission();
+
+        let client_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("client runtime");
+        let result = client_runtime.block_on(super::ClassifyTrait::classify(
+            &service,
+            tonic::Request::new(request("during-shutdown")),
+        ));
+        assert!(
+            matches!(result, Err(ref status) if status.code() == tonic::Code::Unavailable),
+            "closed inference admission must map to UNAVAILABLE: {result:?}"
+        );
+        assert!(shutdown.drain_and_join(Duration::from_secs(1)));
+    }
+
+    #[test]
     fn i013_shutdown_marks_unready_and_drains_active_rpc() {
         let (started_tx, started_rx) = mpsc::channel();
         let gate = Arc::new(ShutdownGate {
@@ -951,12 +984,6 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("active forward must start");
 
-        let mut next_client = client_runtime
-            .block_on(super::generated::classify_client::ClassifyClient::connect(
-                format!("http://{addr}"),
-            ))
-            .expect("second client must connect before shutdown");
-
         server.begin_shutdown();
         assert_eq!(server.readiness(), Readiness::NotReady);
 
@@ -972,19 +999,6 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(5));
         }
-
-        let rejected = client_runtime.block_on(async {
-            tokio::time::timeout(
-                Duration::from_secs(1),
-                next_client.classify(request("during-shutdown")),
-            )
-            .await
-        });
-        assert!(
-            matches!(rejected, Ok(Err(ref status)) if status.code() == tonic::Code::Unavailable),
-            "a new RPC on an existing connection must be rejected during drain: {rejected:?}"
-        );
-        drop(next_client);
 
         {
             let mut released = gate

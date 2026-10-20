@@ -10,7 +10,9 @@
 //! uses) and drive it with a real tonic health client over the wire.
 
 use llm_d_sc::grpc::classify::{ClassifyServer, SERVICE_NAME};
-use llm_d_sc::grpc::health::{HealthClient, ServingStatus};
+use llm_d_sc::grpc::health::{health_client, HealthCheckRequest, HealthClient, ServingStatus};
+use std::time::Duration;
+use tonic::transport::Endpoint;
 
 /// The whole server and the classify service both report SERVING.
 ///
@@ -80,5 +82,62 @@ fn health_watch_streams_the_current_status_first() {
         status,
         ServingStatus::ServiceUnknown,
         "Watch reports SERVICE_UNKNOWN for a service the server does not know"
+    );
+}
+
+/// A live health Watch observes the drain transition and then closes, allowing
+/// tonic's graceful server shutdown to finish instead of waiting on the stream.
+#[test]
+fn health_watch_reports_not_serving_and_closes_during_shutdown() {
+    let mut server = ClassifyServer::bind("127.0.0.1:0").expect("classify server must bind");
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("health client runtime");
+    let channel = runtime
+        .block_on(
+            Endpoint::from_shared(format!("http://{}", server.local_addr()))
+                .expect("health endpoint must parse")
+                .connect(),
+        )
+        .expect("health client must connect");
+    let mut client = health_client::HealthClient::new(channel);
+    let mut watch = runtime
+        .block_on(client.watch(HealthCheckRequest {
+            service: SERVICE_NAME.to_string(),
+        }))
+        .expect("health Watch must start")
+        .into_inner();
+
+    let initial = runtime
+        .block_on(watch.message())
+        .expect("initial Watch response must arrive")
+        .expect("initial Watch response must be present");
+    assert_eq!(
+        ServingStatus::try_from(initial.status).expect("valid health status"),
+        ServingStatus::Serving
+    );
+
+    server.begin_shutdown();
+    let draining = runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(1), watch.message()).await })
+        .expect("Watch must observe shutdown readiness")
+        .expect("shutdown Watch response must succeed")
+        .expect("shutdown Watch response must be present");
+    assert_eq!(
+        ServingStatus::try_from(draining.status).expect("valid health status"),
+        ServingStatus::NotServing
+    );
+    let ended = runtime
+        .block_on(async { tokio::time::timeout(Duration::from_secs(1), watch.message()).await })
+        .expect("Watch must close after the shutdown status")
+        .expect("Watch stream must finish cleanly")
+        .is_none();
+    assert!(ended, "health Watch must end after NOT_SERVING");
+
+    let report = server.finish_shutdown(Duration::from_secs(1));
+    assert!(
+        report.completed(),
+        "server did not drain cleanly: {report:?}"
     );
 }
