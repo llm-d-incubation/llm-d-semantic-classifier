@@ -20,7 +20,7 @@
 //! model. The response never sets `final_route` (AC-010).
 
 use crate::classify::ClassifyError;
-use crate::handoff::InferenceExecutor;
+use crate::handoff::{ExecutorShutdownHandle, InferenceExecutor, QueueAdmissionError};
 use crate::metrics::{Metrics, MetricsSnapshot};
 use crate::telemetry::{RequestEvent, Telemetry, TraceEvent};
 use std::collections::HashMap;
@@ -86,7 +86,7 @@ fn parse_grpc_timeout(value: &str) -> Option<Duration> {
     }
 }
 
-use crate::grpc::health::HealthService;
+use crate::grpc::health::{HealthService, HealthState};
 /// The generated tonic (async) service trait.
 pub use generated::classify_server::Classify as ClassifyTrait;
 
@@ -96,14 +96,36 @@ pub use generated::classify_server::Classify as ClassifyTrait;
 /// tonic classify service on a private Tokio runtime in the background, and
 /// reports the actual bound address via [`ClassifyServer::local_addr`].
 pub struct ClassifyServer {
-    /// Held so the background serving runtime stays alive for the struct's
-    /// lifetime; never read directly (hence the underscore prefix).
-    _runtime: tokio::runtime::Runtime,
+    /// Private runtime that owns the tonic server task.
+    runtime: Option<tokio::runtime::Runtime>,
+    /// The tonic serve future, retained so graceful shutdown can await it.
+    serve_task: Option<tokio::task::JoinHandle<Result<(), tonic::transport::Error>>>,
+    /// Triggers tonic's graceful stop accepting connections.
+    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Coordinates admission closure and worker joining after the RPC drain.
+    executor_shutdown: ExecutorShutdownHandle,
     addr: std::net::SocketAddr,
     metrics: Metrics,
     telemetry: Telemetry,
-    readiness: crate::runtime::Readiness,
+    readiness: tokio::sync::watch::Sender<HealthState>,
     accepted: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    shutdown_started: bool,
+}
+
+/// Outcome of a bounded graceful shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShutdownReport {
+    /// Whether tonic stopped accepting connections and completed its RPC drain.
+    pub server_stopped: bool,
+    /// Whether every inference worker finished queued work and was joined.
+    pub workers_joined: bool,
+}
+
+impl ShutdownReport {
+    /// True when both the gRPC server and inference executor drained cleanly.
+    pub fn completed(self) -> bool {
+        self.server_stopped && self.workers_joined
+    }
 }
 
 /// The runtime-backed tonic classify service.
@@ -203,6 +225,10 @@ where
     pub fn max_admitted(&self) -> usize {
         self.executor.max_admitted()
     }
+
+    fn shutdown_handle(&self) -> ExecutorShutdownHandle {
+        self.executor.shutdown_handle()
+    }
 }
 
 #[tonic::async_trait]
@@ -270,7 +296,14 @@ where
         let respond = self
             .executor
             .try_enqueue_with_deadline(input, deadline)
-            .map_err(|_| tonic::Status::resource_exhausted("inference queue is full"))?;
+            .map_err(|error| match error {
+                QueueAdmissionError::Full => {
+                    tonic::Status::resource_exhausted("inference queue is full")
+                }
+                QueueAdmissionError::ShuttingDown => {
+                    tonic::Status::unavailable("classifier is shutting down")
+                }
+            })?;
         // Await the dedicated executor's forward result (returned via oneshot).
         let result = respond
             .await
@@ -476,6 +509,7 @@ impl ClassifyServer {
         R: crate::classify::ClassifierRuntime + Send + Sync + 'static,
     {
         let addr_str = addr.as_ref();
+        let executor_shutdown = service.shutdown_handle();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -494,9 +528,11 @@ impl ClassifyServer {
         // SAME listener as classify, so an orchestrator probes ONE port with a
         // STANDARD protocol (e.g. a Kubernetes `grpc:` readiness probe) instead
         // of inferring readiness from a bare TCP dial. It fronts the whole
-        // server plus the classify service, reporting the construction-time
-        // readiness: a server only exists after load and warmup succeeded.
-        let health = HealthService::new(readiness, &[SERVICE_NAME]);
+        // server plus the classify service. It shares the lifecycle readiness
+        // state so health clients see the transition to NOT_SERVING on drain.
+        let (readiness_state, health_readiness) =
+            tokio::sync::watch::channel(HealthState::from_readiness(readiness));
+        let health = HealthService::with_readiness(health_readiness, &[SERVICE_NAME]);
         // I-008 evidence: count every ACCEPTED TCP connection. A client that
         // reuses one persistent HTTP/2 channel across N calls produces exactly
         // ONE accept; a client that reconnects per call produces N. Measuring
@@ -528,22 +564,29 @@ impl ClassifyServer {
                 conn
             },
         );
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let serve = tonic::transport::Server::builder()
             .add_service(service)
             .add_service(crate::grpc::health::health_server::HealthServer::new(
                 health,
             ))
-            .serve_with_incoming(incoming);
+            .serve_with_incoming_shutdown(incoming, async move {
+                let _ = shutdown_rx.await;
+            });
 
-        runtime.spawn(serve);
+        let serve_task = runtime.spawn(serve);
 
         Ok(ClassifyServer {
-            _runtime: runtime,
+            runtime: Some(runtime),
+            serve_task: Some(serve_task),
+            shutdown_tx: Some(shutdown_tx),
+            executor_shutdown,
             addr: bound,
             metrics,
             telemetry,
-            readiness,
+            readiness: readiness_state,
             accepted,
+            shutdown_started: false,
         })
     }
 
@@ -553,7 +596,99 @@ impl ClassifyServer {
     /// load/warmup never constructs a server, so readiness is never claimed for
     /// a directory that merely exists (AC-002).
     pub fn readiness(&self) -> crate::runtime::Readiness {
-        self.readiness
+        if self.readiness.borrow().serving {
+            crate::runtime::Readiness::Ready
+        } else {
+            crate::runtime::Readiness::NotReady
+        }
+    }
+
+    /// Mark the server unready, reject new inference work, and ask tonic to
+    /// stop accepting connections. Calls admitted before this returns remain
+    /// eligible to complete during [`ClassifyServer::finish_shutdown`].
+    pub fn begin_shutdown(&mut self) {
+        if self.shutdown_started {
+            return;
+        }
+        self.shutdown_started = true;
+        self.readiness.send_replace(HealthState::draining());
+        self.executor_shutdown.stop_admission();
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+    }
+
+    /// Begin and finish a bounded graceful shutdown.
+    pub fn shutdown(mut self, grace: Duration) -> ShutdownReport {
+        self.begin_shutdown();
+        self.finish_shutdown(grace)
+    }
+
+    /// Finish the graceful shutdown after [`ClassifyServer::begin_shutdown`].
+    /// The same `grace` bounds the total time spent waiting for tonic and for
+    /// inference workers to finish; unfinished native forwards cannot be
+    /// interrupted and are abandoned when the process exits after the bound.
+    pub fn finish_shutdown(mut self, grace: Duration) -> ShutdownReport {
+        self.begin_shutdown();
+        let deadline = Instant::now().checked_add(grace);
+
+        let server_stopped = match (self.runtime.as_ref(), self.serve_task.as_mut()) {
+            (Some(runtime), Some(serve_task)) => {
+                match runtime.block_on(async {
+                    tokio::time::timeout(remaining_until(deadline), &mut *serve_task).await
+                }) {
+                    Ok(Ok(Ok(()))) => true,
+                    Ok(Ok(Err(error))) => {
+                        eprintln!("llm-d-sc: gRPC server stopped with error: {error}");
+                        false
+                    }
+                    Ok(Err(error)) => {
+                        eprintln!("llm-d-sc: gRPC server task failed: {error}");
+                        false
+                    }
+                    Err(_) => {
+                        serve_task.abort();
+                        let _ = runtime.block_on(&mut *serve_task);
+                        false
+                    }
+                }
+            }
+            _ => true,
+        };
+
+        let workers_joined = self
+            .executor_shutdown
+            .drain_and_join(remaining_until(deadline));
+
+        // `Runtime::drop` can wait for spawned tasks. Use the remaining grace
+        // budget so a stuck connection task cannot extend shutdown indefinitely.
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_timeout(remaining_until(deadline));
+        }
+
+        ShutdownReport {
+            server_stopped,
+            workers_joined,
+        }
+    }
+
+    /// Wait for SIGTERM or Ctrl-C, then perform a bounded graceful shutdown.
+    /// This is used by the production binary; tests can trigger the same path
+    /// directly with [`ClassifyServer::begin_shutdown`].
+    pub fn wait_for_shutdown_signal(self, grace: Duration) -> io::Result<ShutdownReport> {
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| io::Error::other("server runtime already stopped"))?;
+        match runtime.block_on(wait_for_shutdown_signal()) {
+            Ok(()) => Ok(self.shutdown(grace)),
+            Err(error) => {
+                // Avoid dropping a live runtime with the server task still
+                // serving if signal registration fails.
+                let _ = self.shutdown(grace);
+                Err(error)
+            }
+        }
     }
 
     /// The actual bound address (resolved after an ephemeral `:0` bind).
@@ -597,6 +732,26 @@ impl ClassifyServer {
     pub fn trace_capture(&self) -> Vec<TraceEvent> {
         self.telemetry.trace_capture()
     }
+}
+
+fn remaining_until(deadline: Option<Instant>) -> Duration {
+    deadline
+        .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+        .unwrap_or(Duration::MAX)
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> io::Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result,
+        _ = terminate.recv() => Ok(()),
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> io::Result<()> {
+    tokio::signal::ctrl_c().await
 }
 
 /// Blocking classify client over a persistent HTTP/2 channel.
@@ -645,8 +800,17 @@ impl ClassifyClient {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_grpc_timeout;
-    use std::time::Duration;
+    use super::{parse_grpc_timeout, ClassifyServer, ClassifyServiceImpl};
+    use crate::classify::{
+        ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyStatus, Embedding,
+        RankedSignal, RankingMode, RuntimeMetadata,
+    };
+    use crate::metrics::Metrics;
+    use crate::runtime::Readiness;
+    use crate::telemetry::Telemetry;
+    use std::net::{SocketAddr, TcpStream};
+    use std::sync::{mpsc, Arc, Condvar, Mutex};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn parses_grpc_timeout_units() {
@@ -663,5 +827,214 @@ mod tests {
         assert_eq!(parse_grpc_timeout("1x"), None);
         assert_eq!(parse_grpc_timeout("123456789S"), None);
         assert_eq!(parse_grpc_timeout("abcS"), None);
+    }
+
+    struct ShutdownGate {
+        started: Mutex<Option<mpsc::Sender<()>>>,
+        released: Mutex<bool>,
+        release: Condvar,
+    }
+
+    struct ShutdownClassifier {
+        gate: Arc<ShutdownGate>,
+    }
+
+    impl ClassifierRuntime for ShutdownClassifier {
+        fn metadata(&self) -> RuntimeMetadata {
+            RuntimeMetadata {
+                classifier_id: "shutdown-test".into(),
+                signal: "test".into(),
+                model_revision: "test-model".into(),
+                tokenizer_revision: "test-tokenizer".into(),
+                taxonomy_revision: "test-taxonomy".into(),
+                artifact_digest: None,
+                ranking_mode: RankingMode::AnchorCosine,
+            }
+        }
+
+        fn embed(
+            &self,
+            input: &ClassificationInput,
+        ) -> Result<Embedding, crate::classify::ClassifyError> {
+            if input.text == "hold-forward" {
+                if let Some(started) = self
+                    .gate
+                    .started
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    let _ = started.send(());
+                }
+                let mut released = self
+                    .gate
+                    .released
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                while !*released {
+                    released = self
+                        .gate
+                        .release
+                        .wait(released)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+            }
+            Ok(Embedding::new(vec![1.0]))
+        }
+
+        fn rank(
+            &self,
+            _embedding: &Embedding,
+            _input: &ClassificationInput,
+        ) -> Result<ClassificationResult, crate::classify::ClassifyError> {
+            let metadata = self.metadata();
+            Ok(ClassificationResult {
+                classifier_id: metadata.classifier_id,
+                model_revision: metadata.model_revision,
+                tokenizer_revision: metadata.tokenizer_revision,
+                taxonomy_revision: metadata.taxonomy_revision,
+                status: ClassifyStatus::Ok,
+                ranked: vec![RankedSignal {
+                    id: "result".into(),
+                    score: 1.0,
+                }],
+            })
+        }
+    }
+
+    fn request(context: &str) -> super::generated::ClassifyRequest {
+        super::generated::ClassifyRequest {
+            request_id: context.into(),
+            session_id: "shutdown-test-session".into(),
+            context: context.into(),
+            signals: vec![],
+            context_completeness: super::generated::ContextCompleteness::Full as i32,
+        }
+    }
+
+    #[test]
+    fn u035_shutdown_admission_maps_to_unavailable() {
+        let service = ClassifyServiceImpl::with_executor(
+            ShutdownClassifier {
+                gate: Arc::new(ShutdownGate {
+                    started: Mutex::new(None),
+                    released: Mutex::new(false),
+                    release: Condvar::new(),
+                }),
+            },
+            Telemetry::new(),
+            Metrics::new(),
+            1,
+        );
+        let shutdown = service.shutdown_handle();
+        shutdown.stop_admission();
+
+        let client_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("client runtime");
+        let result = client_runtime.block_on(super::ClassifyTrait::classify(
+            &service,
+            tonic::Request::new(request("during-shutdown")),
+        ));
+        assert!(
+            matches!(result, Err(ref status) if status.code() == tonic::Code::Unavailable),
+            "closed inference admission must map to UNAVAILABLE: {result:?}"
+        );
+        assert!(shutdown.drain_and_join(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn i013_shutdown_marks_unready_and_drains_active_rpc() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let gate = Arc::new(ShutdownGate {
+            started: Mutex::new(Some(started_tx)),
+            released: Mutex::new(false),
+            release: Condvar::new(),
+        });
+        let metrics = Metrics::new();
+        let service = ClassifyServiceImpl::with_executor(
+            ShutdownClassifier { gate: gate.clone() },
+            Telemetry::new(),
+            metrics.clone(),
+            4,
+        );
+        let mut server = ClassifyServer::serve(
+            "127.0.0.1:0",
+            service,
+            metrics,
+            Telemetry::new(),
+            Readiness::Ready,
+        )
+        .expect("server must bind");
+        let addr = server.local_addr();
+
+        let client_runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("client runtime");
+        let mut active_client = client_runtime
+            .block_on(super::generated::classify_client::ClassifyClient::connect(
+                format!("http://{addr}"),
+            ))
+            .expect("active client must connect");
+        let active_call = client_runtime
+            .spawn(async move { active_client.classify(request("hold-forward")).await });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("active forward must start");
+
+        server.begin_shutdown();
+        assert_eq!(server.readiness(), Readiness::NotReady);
+
+        let socket_addr: SocketAddr = addr.parse().expect("server address must parse");
+        let listener_closed_by = Instant::now() + Duration::from_secs(1);
+        loop {
+            if TcpStream::connect_timeout(&socket_addr, Duration::from_millis(20)).is_err() {
+                break;
+            }
+            assert!(
+                Instant::now() < listener_closed_by,
+                "shutdown must close the listener so the TCP readiness probe fails"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        {
+            let mut released = gate
+                .released
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *released = true;
+            gate.release.notify_all();
+        }
+
+        let response = client_runtime
+            .block_on(active_call)
+            .expect("active RPC task must finish")
+            .expect("accepted RPC must drain successfully")
+            .into_inner();
+        assert_eq!(
+            response.status,
+            super::generated::ClassificationStatus::Ok as i32
+        );
+
+        let report = server.finish_shutdown(Duration::from_secs(2));
+        assert!(
+            report.completed(),
+            "shutdown did not drain cleanly: {report:?}"
+        );
+    }
+
+    #[test]
+    fn r015_repeated_server_shutdown_does_not_deadlock() {
+        for _ in 0..3 {
+            let server = ClassifyServer::bind("127.0.0.1:0").expect("server must bind");
+            let report = server.shutdown(Duration::from_secs(1));
+            assert!(
+                report.completed(),
+                "server did not stop cleanly: {report:?}"
+            );
+        }
     }
 }

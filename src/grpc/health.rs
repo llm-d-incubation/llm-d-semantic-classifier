@@ -11,15 +11,13 @@
 //!
 //! Semantics:
 //!   - `Check("")` is the WHOLE server; `Check("classify.Classify")` is the
-//!     classify service. Both map the construction-time [`Readiness`]: a
-//!     [`ClassifyServer`](crate::grpc::classify::ClassifyServer) only exists
-//!     after the model is loaded and warmed (a ModelCar that fails load or
-//!     warmup never reaches the bind), so a bound server reports SERVING. A
-//!     service name this server does not know is an explicit NOT_FOUND.
-//!   - `Watch` streams the current status first, then stays open. Readiness
-//!     is fixed at bind time, so there is no later transition to report; if
-//!     readiness ever becomes dynamic (e.g. graceful drain), the status
-//!     source in [`HealthService`] is the single place to change.
+//!     classify service. Both read the same live readiness state used by
+//!     [`ClassifyServer`](crate::grpc::classify::ClassifyServer). A bound
+//!     server starts SERVING only after model loading and warmup succeeded.
+//!   - `Watch` streams the current status, then each readiness change. When
+//!     shutdown begins it sends NOT_SERVING and closes the stream so the
+//!     server's graceful drain can finish. Unknown service names retain the
+//!     standard Check/Watch behavior.
 
 use crate::runtime::Readiness;
 use std::io;
@@ -27,6 +25,31 @@ use std::pin::Pin;
 use std::time::Duration;
 use tokio_stream::StreamExt;
 use tonic::transport::Endpoint;
+
+/// Readiness shared by the server lifecycle and the gRPC health service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HealthState {
+    pub(crate) serving: bool,
+    /// Shutdown is terminal for this process: watchers emit the final status
+    /// and close, allowing tonic to finish draining active RPCs.
+    pub(crate) draining: bool,
+}
+
+impl HealthState {
+    pub(crate) fn from_readiness(readiness: Readiness) -> Self {
+        Self {
+            serving: readiness.ready(),
+            draining: false,
+        }
+    }
+
+    pub(crate) fn draining() -> Self {
+        Self {
+            serving: false,
+            draining: true,
+        }
+    }
+}
 
 /// Generated protobuf messages and tonic service/client code for
 /// `grpc.health.v1` (from `proto/health.proto`, produced by `build.rs`).
@@ -50,8 +73,11 @@ pub use generated::grpc::health::v1::{
 
 /// The standard health service, serving the protocol's `Check` and `Watch`.
 pub struct HealthService {
-    /// True when the runtime this service fronts is ready to serve traffic.
-    serving: bool,
+    /// Current readiness, shared with the owning server lifecycle.
+    readiness: tokio::sync::watch::Receiver<HealthState>,
+    /// Keeps the channel alive for callers using the public fixed-readiness
+    /// constructor. Server-owned services retain the lifecycle sender instead.
+    _readiness_guard: Option<tokio::sync::watch::Sender<HealthState>>,
     /// Fully-qualified gRPC service names this server serves (e.g.
     /// [`crate::grpc::classify::SERVICE_NAME`]). The empty service name — the
     /// WHOLE server, per the protocol — is always known and never listed.
@@ -62,8 +88,27 @@ impl HealthService {
     /// A health service reporting `readiness` for the whole server and for
     /// each fully-qualified name in `services`.
     pub fn new(readiness: Readiness, services: &[&str]) -> Self {
+        let (sender, receiver) =
+            tokio::sync::watch::channel(HealthState::from_readiness(readiness));
+        Self::build(receiver, Some(sender), services)
+    }
+
+    /// A health service that shares a live readiness channel with its server.
+    pub(crate) fn with_readiness(
+        readiness: tokio::sync::watch::Receiver<HealthState>,
+        services: &[&str],
+    ) -> Self {
+        Self::build(readiness, None, services)
+    }
+
+    fn build(
+        readiness: tokio::sync::watch::Receiver<HealthState>,
+        readiness_guard: Option<tokio::sync::watch::Sender<HealthState>>,
+        services: &[&str],
+    ) -> Self {
         HealthService {
-            serving: readiness.ready(),
+            readiness,
+            _readiness_guard: readiness_guard,
             services: services.iter().map(|s| (*s).to_string()).collect(),
         }
     }
@@ -71,8 +116,9 @@ impl HealthService {
     /// The serving status for `service`, or `None` when this server does not
     /// know that service name at all.
     fn status(&self, service: &str) -> Option<ServingStatus> {
+        let state = *self.readiness.borrow();
         if service.is_empty() || self.services.iter().any(|s| s == service) {
-            Some(if self.serving {
+            Some(if state.serving {
                 ServingStatus::Serving
             } else {
                 ServingStatus::NotServing
@@ -110,16 +156,50 @@ impl health_server::Health for HealthService {
     ) -> Result<tonic::Response<Self::WatchStream>, tonic::Status> {
         // Watch never fails for an unknown service: per the protocol it
         // reports SERVICE_UNKNOWN (NOT_FOUND is a Check-only error).
-        let status = self
-            .status(&request.into_inner().service)
-            .unwrap_or(ServingStatus::ServiceUnknown);
-        // The current status first, then keep the stream open for the rest of
-        // the RPC: readiness is fixed at bind time, so there is no later
-        // transition to stream. The stream ends when the client cancels.
-        let stream = tokio_stream::once(Ok(HealthCheckResponse {
-            status: status as i32,
-        }))
-        .chain(tokio_stream::pending());
+        let service = request.into_inner().service;
+        let known = service.is_empty() || self.services.iter().any(|s| s == &service);
+        let mut readiness = self.readiness.clone();
+        let (response_tx, response_rx) = tokio::sync::mpsc::channel(1);
+        tokio::spawn(async move {
+            let mut first = true;
+            loop {
+                let state = *readiness.borrow_and_update();
+                if known || first {
+                    let status = if !known {
+                        ServingStatus::ServiceUnknown
+                    } else if state.serving {
+                        ServingStatus::Serving
+                    } else {
+                        ServingStatus::NotServing
+                    };
+                    let response = Ok(HealthCheckResponse {
+                        status: status as i32,
+                    });
+                    tokio::select! {
+                        result = response_tx.send(response) => {
+                            if result.is_err() {
+                                return;
+                            }
+                        }
+                        _ = response_tx.closed() => return,
+                    }
+                }
+                first = false;
+
+                if state.draining {
+                    return;
+                }
+                tokio::select! {
+                    _ = response_tx.closed() => return,
+                    changed = readiness.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        let stream = tokio_stream::wrappers::ReceiverStream::new(response_rx);
         Ok(tonic::Response::new(Box::pin(stream)))
     }
 }
@@ -198,13 +278,27 @@ mod tests {
     use super::{HealthService, ServingStatus};
     use crate::runtime::Readiness;
 
+    fn health(
+        readiness: Readiness,
+    ) -> (
+        HealthService,
+        tokio::sync::watch::Sender<super::HealthState>,
+    ) {
+        let (sender, receiver) =
+            tokio::sync::watch::channel(super::HealthState::from_readiness(readiness));
+        (
+            HealthService::with_readiness(receiver, &["classify.Classify"]),
+            sender,
+        )
+    }
+
     /// A not-ready runtime must report NOT_SERVING, never SERVING: the health
     /// endpoint is only useful if it can fail. No public bind path constructs
     /// a NotReady server today (bind happens only after warmup succeeds), so
     /// the readiness mapping is pinned here at the unit level.
     #[test]
     fn not_ready_runtime_reports_not_serving() {
-        let health = HealthService::new(Readiness::NotReady, &["classify.Classify"]);
+        let (health, _) = health(Readiness::NotReady);
         assert_eq!(health.status(""), Some(ServingStatus::NotServing));
         assert_eq!(
             health.status("classify.Classify"),
@@ -217,7 +311,38 @@ mod tests {
     /// status for a service that is not there.
     #[test]
     fn unknown_service_name_has_no_status() {
-        let health = HealthService::new(Readiness::Ready, &["classify.Classify"]);
+        let (health, _) = health(Readiness::Ready);
         assert_eq!(health.status("no.such.Service"), None);
+    }
+
+    #[test]
+    fn check_reads_shared_readiness_updates() {
+        let (health, readiness) = health(Readiness::Ready);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("health test runtime");
+        let check = || {
+            runtime
+                .block_on(<HealthService as super::health_server::Health>::check(
+                    &health,
+                    tonic::Request::new(super::HealthCheckRequest {
+                        service: "classify.Classify".into(),
+                    }),
+                ))
+                .expect("health Check must succeed")
+                .into_inner()
+                .status
+        };
+
+        assert_eq!(
+            ServingStatus::try_from(check()).expect("valid health status"),
+            ServingStatus::Serving
+        );
+        readiness.send_replace(super::HealthState::draining());
+        assert_eq!(
+            ServingStatus::try_from(check()).expect("valid health status"),
+            ServingStatus::NotServing
+        );
     }
 }

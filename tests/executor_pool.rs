@@ -19,7 +19,7 @@ use llm_d_sc::classify::{
     ClassificationInput, ClassificationResult, ClassifierRuntime, ClassifyError, ClassifyStatus,
     Embedding, RankedSignal, RuntimeMetadata,
 };
-use llm_d_sc::handoff::InferenceExecutor;
+use llm_d_sc::handoff::{InferenceExecutor, QueueAdmissionError};
 use llm_d_sc::metrics::Metrics;
 
 /// Per-forward delay: long enough that serialisation is unambiguous.
@@ -360,4 +360,119 @@ fn i093_expired_queued_job_is_skipped_and_reports_deadline() {
     let snapshot = metrics.snapshot();
     assert_eq!(snapshot.queued_expired, 1);
     assert_eq!(snapshot.queued_cancelled, 0);
+}
+
+#[test]
+fn u035_shutdown_rejects_new_work_and_drains_admitted_jobs() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let first_started = Arc::new(Barrier::new(2));
+    let release_first = Arc::new(Barrier::new(2));
+    let classifier = CancellationClassifier {
+        calls: calls.clone(),
+        first_started: first_started.clone(),
+        release_first: release_first.clone(),
+    };
+    let executor = Arc::new(InferenceExecutor::spawn_with_workers(
+        classifier,
+        Metrics::new(),
+        2,
+        1,
+    ));
+
+    let first = executor
+        .try_enqueue(ClassificationInput {
+            text: "blocking".into(),
+            requested_signals: vec!["sensitivity".into()],
+            session_metadata: Default::default(),
+            context_completeness: Default::default(),
+        })
+        .expect("first job must be admitted");
+    first_started.wait();
+
+    let queued = executor
+        .try_enqueue(ClassificationInput {
+            text: "queued".into(),
+            requested_signals: vec!["sensitivity".into()],
+            session_metadata: Default::default(),
+            context_completeness: Default::default(),
+        })
+        .expect("second job must be admitted behind the active forward");
+
+    let shutdown = executor.shutdown_handle();
+    shutdown.stop_admission();
+    assert!(
+        matches!(
+            executor.try_enqueue(ClassificationInput {
+                text: "after-shutdown".into(),
+                requested_signals: vec!["sensitivity".into()],
+                session_metadata: Default::default(),
+                context_completeness: Default::default(),
+            }),
+            Err(QueueAdmissionError::ShuttingDown)
+        ),
+        "shutdown must close admission before draining"
+    );
+
+    let join = std::thread::spawn(move || shutdown.drain_and_join(Duration::from_secs(2)));
+    release_first.wait();
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(first)
+        .expect("active job must receive a result")
+        .expect("active job must complete");
+    rt.block_on(queued)
+        .expect("queued job must receive a result")
+        .expect("queued job must drain");
+
+    assert!(join.join().expect("shutdown thread must finish"));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn u035_shutdown_times_out_at_grace_and_later_joins_workers() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let first_started = Arc::new(Barrier::new(2));
+    let release_first = Arc::new(Barrier::new(2));
+    let classifier = CancellationClassifier {
+        calls,
+        first_started: first_started.clone(),
+        release_first: release_first.clone(),
+    };
+    let executor = InferenceExecutor::spawn_with_workers(classifier, Metrics::new(), 1, 1);
+    let active = executor
+        .try_enqueue(ClassificationInput {
+            text: "blocking".into(),
+            requested_signals: vec!["sensitivity".into()],
+            session_metadata: Default::default(),
+            context_completeness: Default::default(),
+        })
+        .expect("active job must be admitted");
+    first_started.wait();
+
+    let shutdown = executor.shutdown_handle();
+    let started = Instant::now();
+    assert!(
+        !shutdown.drain_and_join(Duration::from_millis(10)),
+        "blocked forwards must report an incomplete drain"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "shutdown must respect its grace deadline"
+    );
+
+    release_first.wait();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(active)
+        .expect("active job must receive a result")
+        .expect("active job must complete after release");
+    assert!(
+        shutdown.drain_and_join(Duration::from_secs(1)),
+        "a later join must reap workers after their forward completes"
+    );
 }

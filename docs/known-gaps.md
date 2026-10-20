@@ -36,8 +36,6 @@ acceptance criterion, every required test ID, and its execution status.
 | Gap | Impact | Phase |
 | --- | --- | --- |
 | Executor width is not auto-tuned | the executor now runs a real worker pool (default 4, `LLM_D_SC_INFERENCE_WORKERS`), but the best width for a given host and quantisation is not discovered automatically | 0.2 |
-| No per-request deadlines or cancellation | a queued request cannot be abandoned when the caller has already given up | 0.2 |
-| No graceful drain | shutdown does not stop admission and drain in-flight work in a defined order | 0.2 |
 
 ## Observability
 
@@ -66,6 +64,8 @@ Listed so the history is legible rather than quietly rewritten.
 | Classifier ranked against synthetic prototypes and reported synthetic revisions | artifact-backed classifier definitions with real anchors and revisions (`I-072`, `I-073`, `I-074`) |
 | Persistent-channel claim rested on a counter that was never incremented | the claim is now measured server-side by counting accepted TCP connections (`I-002`, with `I-092` as the control) |
 | Only cumulative latency sums were recorded | per-stage histograms with p50/p95/p99 (`U-086` through `U-089`) |
+| Queued inference continued after its caller gave up | expired or cancelled queued jobs are skipped and counted (`I-092`, `I-093`; PR #29) |
+| Shutdown dropped accepted inference work | SIGTERM stops readiness and admission, gracefully stops gRPC, and joins drained inference workers (`U-035`, `I-013`, `R-015`) |
 
 ## Reporting a gap
 
