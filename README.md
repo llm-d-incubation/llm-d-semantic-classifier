@@ -406,3 +406,32 @@ through [SECURITY.md](SECURITY.md), not public issues.
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+
+## Known integrations
+
+### Cascade Compression
+
+[Cascade Compression](https://github.com/jkershawrh/cascade-compression)
+is a signal-compression engine that uses llm-d-sc as a margin-gated CPU
+fast path within a three-tier classification pipeline. Cascade routes
+the repetitive majority of operational signals (Kubernetes events,
+Ansible task outcomes, IoT telemetry) through deterministic tiers;
+llm-d-sc serves the confident remainder on CPU; the LLM handles only
+what anchor similarity cannot discriminate.
+
+**Measured on 160 adjudicated production signals** (Kubernetes event
+stream, multi-tenant demo platform): llm-d-sc anchor-based
+classification achieved 55% agreement with human adjudication —
+equivalent to a 3-model judge panel (55.6%). Needs_attention recall:
+91%. Deployed as a margin-gated fast path: confident anchor matches
+are served on CPU (zero model calls); ambiguous cases fall through to
+the LLM fact-extraction rubric.
+
+In the full pipeline (nano tier + value rules + llm-d-sc + LLM): 92%
+end-to-end signal elimination with zero dangerous misses on a 24-hour
+platform pilot.
+
+See the [Cascade Compression README](https://github.com/jkershawrh/cascade-compression)
+and the
+[platform pilot case study](https://github.com/jkershawrh/cascade-compression/blob/main/docs/case-study-platform-pilot.md)
+for full architecture and measured results.
